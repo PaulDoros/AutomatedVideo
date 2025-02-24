@@ -169,18 +169,26 @@
               class="border-2 border-blue-300 p-2 rounded-md focus:outline-none focus:border-blue-500"
               placeholder="Only provide this option in case you want to replace the default prompt"
             ></textarea>
-          <label
-            for="youtubeUploadToggle"
-            class="flex items-center text-blue-600"
-          >
-            <input
-              type="checkbox"
-              name="youtubeUploadToggle"
-              id="youtubeUploadToggle"
-              class="mr-2"
-            />
-            Upload to YouTube
-          </label>
+          <div class="flex flex-col space-y-2">
+            <label for="youtubeUploadToggle" class="flex items-center text-blue-600">
+              <input type="checkbox" name="youtubeUploadToggle" id="youtubeUploadToggle" class="mr-2"/>
+              Upload to YouTube
+            </label>
+            
+            <div class="flex flex-col space-y-2 ml-6">
+              <label for="youtubeAccount" class="text-blue-600">YouTube Channel:</label>
+              <select
+                name="youtubeAccount"
+                id="youtubeAccount"
+                class="w-full border-2 border-blue-300 p-2 rounded-md focus:outline-none focus:border-blue-500"
+              >
+                <option value="main">Tech Humor Channel</option>
+                <option value="business">Business Channel</option>
+                <option value="gaming">Gaming Channel</option>
+                <option value="tech">Tech Channel</option>
+              </select>
+            </div>
+          </div>
           <label for="useMusicToggle" class="flex items-center text-blue-600">
             <input
               type="checkbox"
@@ -202,6 +210,26 @@
             />
             Reuse Choices?
           </label>
+          <div class="flex flex-col space-y-4">
+            <label for="tiktokUploadToggle" class="flex items-center text-blue-600">
+              <input type="checkbox" name="tiktokUploadToggle" id="tiktokUploadToggle" class="mr-2"/>
+              Upload to TikTok
+            </label>
+            
+            <div class="flex flex-col space-y-2">
+              <label for="tiktokAccount" class="text-blue-600">TikTok Channel:</label>
+              <select
+                name="tiktokAccount"
+                id="tiktokAccount"
+                class="w-full border-2 border-blue-300 p-2 rounded-md focus:outline-none focus:border-blue-500"
+              >
+                <option value="main">Tech Humor (1ec280d76c9df10e1d3f0d8228a7a456)</option>
+                <option value="business">Business (1ec280d76c9df10e1d3f0d8228a7a456)</option>
+                <option value="gaming">Gaming (1ec280d76c9df10e1d3f0d8228a7a456)</option>
+                <option value="tech">Tech (1ec280d76c9df10e1d3f0d8228a7a456sa)</option>
+              </select>
+            </div>
+          </div>
         </div>
         <button
           id="generateButton"

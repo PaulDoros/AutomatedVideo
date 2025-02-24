@@ -28,43 +28,72 @@ def generate_response(prompt: str, ai_model: str) -> str:
         video_subject (str): The subject of the video.
         ai_model (str): The AI model to use for generation.
 
-
     Returns:
-
         str: The response from the AI model.
-
     """
+
+    # Normalize the model name to lowercase
+    ai_model = ai_model.lower()
 
     if ai_model == 'g4f':
         # Newest G4F Architecture
-        client = Client()
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            provider=g4f.Provider.You, 
-            messages=[{"role": "user", "content": prompt}],
-        ).choices[0].message.content
+        try:
+            client = Client()
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                # Try different providers in order until one works
+                provider=g4f.Provider.DeepAi,  # Changed from You to DeepAi
+                messages=[{"role": "user", "content": prompt}],
+            ).choices[0].message.content
+            return response
+        except Exception as e:
+            print(colored(f"[-] First G4F provider failed, trying backup...", "yellow"))
+            try:
+                # Backup provider
+                response = g4f.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    provider=g4f.Provider.You,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response
+            except Exception as e2:
+                print(colored(f"[-] All G4F providers failed, falling back to OpenAI", "red"))
+                return generate_response(prompt, "gpt-3.5-turbo-1106")
 
-    elif ai_model in ["gpt3.5-turbo", "gpt4"]:
+    elif ai_model in [
+        "gpt-3.5-turbo", 
+        "gpt-3.5-turbo-1106", 
+        "gpt-4", 
+        "gpt-4-1106-preview",
+        "gpt-4-turbo-preview",
+        "gpt3.5-turbo",  # Support legacy names
+        "gpt4"
+    ]:
+        model_name = ai_model
+        if ai_model == "gpt3.5-turbo":
+            model_name = "gpt-3.5-turbo-1106"
+        elif ai_model == "gpt4":
+            model_name = "gpt-4-1106-preview"
 
-        model_name = "gpt-3.5-turbo" if ai_model == "gpt3.5-turbo" else "gpt-4-1106-preview"
+        try:
+            response = openai.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+            ).choices[0].message.content
+            return response
+        except Exception as e:
+            print(colored(f"[-] OpenAI API error: {str(e)}", "red"))
+            # Try one last time with G4F as backup
+            return generate_response(prompt, "g4f")
 
-        response = openai.chat.completions.create(
-
-            model=model_name,
-
-            messages=[{"role": "user", "content": prompt}],
-
-        ).choices[0].message.content
     elif ai_model == 'gemmini':
         model = genai.GenerativeModel('gemini-pro')
         response_model = model.generate_content(prompt)
-        response = response_model.text
+        return response_model.text
 
     else:
-
-        raise ValueError("Invalid AI model selected.")
-
-    return response
+        print(colored(f"[-] Unknown model: {ai_model}, falling back to gpt-3.5-turbo-1106", "yellow"))
+        return generate_response(prompt, "gpt-3.5-turbo-1106")
 
 def generate_script(video_subject: str, paragraph_number: int, ai_model: str, voice: str, customPrompt: str) -> str:
 
@@ -203,26 +232,54 @@ def get_search_terms(video_subject: str, amount: int, script: str, ai_model: str
     search_terms = []
     
     try:
-        search_terms = json.loads(response)
+        # First try to parse as pure JSON
+        search_terms = json.loads(response.strip())
         if not isinstance(search_terms, list) or not all(isinstance(term, str) for term in search_terms):
             raise ValueError("Response is not a list of strings.")
 
-    except (json.JSONDecodeError, ValueError):
-        # Get everything between the first and last square brackets
-        response = response[response.find("[") + 1:response.rfind("]")]
-
+    except (json.JSONDecodeError, ValueError) as e:
         print(colored("[*] GPT returned an unformatted response. Attempting to clean...", "yellow"))
+        try:
+            # Find anything that looks like a JSON array
+            match = re.search(r'\[[\s\S]*\]', response)
+            if match:
+                cleaned_json = match.group()
+                search_terms = json.loads(cleaned_json)
+            else:
+                # If no JSON array found, split by commas and clean up
+                terms = response.replace('[', '').replace(']', '').split(',')
+                search_terms = [term.strip().strip('"\'') for term in terms if term.strip()]
+                
+            # Validate the terms
+            search_terms = [term for term in search_terms if term and isinstance(term, str)]
+            
+            if not search_terms:
+                # Fallback to basic terms if everything else fails
+                search_terms = [
+                    f"{video_subject} footage",
+                    f"{video_subject} video",
+                    f"{video_subject} clip",
+                    "business footage",
+                    "office work"
+                ]
+                print(colored("[-] Using fallback search terms", "yellow"))
+        except Exception as e2:
+            print(colored(f"[-] Error parsing search terms: {str(e2)}", "red"))
+            # Use fallback terms
+            search_terms = [
+                f"{video_subject} footage",
+                f"{video_subject} video",
+                f"{video_subject} clip",
+                "business footage",
+                "office work"
+            ]
 
-        # Attempt to extract list-like string and convert to list
-        match = re.search(r'\["(?:[^"\\]|\\.)*"(?:,\s*"[^"\\]*")*\]', response)
-        print(match.group())
-        if match:
-            try:
-                search_terms = json.loads(match.group())
-            except json.JSONDecodeError:
-                print(colored("[-] Could not parse response.", "red"))
-                return []
+    # Ensure we have enough terms
+    while len(search_terms) < amount:
+        search_terms.append(f"{video_subject} clip {len(search_terms) + 1}")
 
+    # Limit to requested amount
+    search_terms = search_terms[:amount]
 
     # Let user know
     print(colored(f"\nGenerated {len(search_terms)} search terms: {', '.join(search_terms)}", "cyan"))

@@ -3,14 +3,18 @@ import sys
 import time
 import random
 import httplib2
-
+import pickle
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google.oauth2.credentials import Credentials
+from googleapiclient.errors import HttpError
 from termcolor import colored
 from oauth2client.file import Storage
-from apiclient.discovery import build
-from apiclient.errors import HttpError
-from apiclient.http import MediaFileUpload
 from oauth2client.tools import argparser, run_flow
 from oauth2client.client import flow_from_clientsecrets
+from dotenv import load_dotenv
 
 # Explicitly tell the underlying HTTP transport library not to retry, since
 # we are handling retry logic ourselves.
@@ -60,26 +64,35 @@ https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
 VALID_PRIVACY_STATUSES = ("public", "private", "unlisted")  
   
   
-def get_authenticated_service():
-    """
-    This method retrieves the YouTube service.
+def get_authenticated_service(channel='main'):
+    """Get credentials and create an API client."""
+    # Use the same client_secret.json for all channels
+    client_secrets_file = 'client_secret.json'
+    
+    # Create unique token file for each channel
+    token_file = f'token_{channel}.pickle'
+    
+    credentials = None
+    # Check if we have valid token for this channel
+    if os.path.exists(token_file):
+        with open(token_file, 'rb') as token:
+            credentials = pickle.load(token)
 
-    Returns:
-        any: The authenticated YouTube service.
-    """
-    flow = flow_from_clientsecrets(CLIENT_SECRETS_FILE,
-                                   scope=SCOPES,
-                                   message=MISSING_CLIENT_SECRETS_MESSAGE)
+    # If no valid credentials, let user login with desired channel
+    if not credentials or not credentials.valid:
+        if credentials and credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                client_secrets_file, SCOPES)
+            print(colored(f"[!] Please login with your {channel} channel...", "yellow"))
+            credentials = flow.run_local_server(port=0)
+        
+        # Save credentials for this channel
+        with open(token_file, 'wb') as token:
+            pickle.dump(credentials, token)
 
-    storage = Storage(f"{sys.argv[0]}-oauth2.json")
-    credentials = storage.get()
-
-    if credentials is None or credentials.invalid:
-        flags = argparser.parse_args()
-        credentials = run_flow(flow, storage, flags)
-
-    return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION,
-                 http=credentials.authorize(httplib2.Http()))
+    return build('youtube', 'v3', credentials=credentials)
 
 def initialize_upload(youtube: any, options: dict):
     """
@@ -160,39 +173,102 @@ def resumable_upload(insert_request: MediaFileUpload):
             print(colored(f" => Sleeping {sleep_seconds} seconds and then retrying...", "blue"))
             time.sleep(sleep_seconds)  
   
-def upload_video(video_path, title, description, category, keywords, privacy_status):
+def upload_video(video_path, title, description, category, keywords, privacy_status, channel='main'):
+    """Upload video to YouTube."""
     try:
-        # Get the authenticated YouTube service
-        youtube = get_authenticated_service()
+        # Get the authenticated YouTube service for specific channel
+        youtube = get_authenticated_service(channel)
 
-        # Retrieve and print the channel ID for the authenticated user
-        channels_response = youtube.channels().list(mine=True, part='id').execute()
-        for channel in channels_response['items']:
-            print(colored(f" => Channel ID: {channel['id']}", "blue"))
+        # Print which channel we're uploading to
+        channels_response = youtube.channels().list(mine=True, part='snippet').execute()
+        channel_title = channels_response['items'][0]['snippet']['title']
+        print(colored(f"[+] Uploading to YouTube channel: {channel_title}", "blue"))
 
         # Initialize the upload process
         video_response = initialize_upload(youtube, {
-            'file': video_path, # The path to the video file
+            'file': video_path,
             'title': title,
             'description': description,
-            'category': category, 
+            'category': category,
             'keywords': keywords,
             'privacyStatus': privacy_status
         })
-        return video_response # Return the response from the upload process
+        return video_response
     except HttpError as e:
         print(colored(f"[-] An HTTP error {e.resp.status} occurred:\n{e.content}", "red"))
-        if e.resp.status in [401, 403]:
-            # Here you could refresh the credentials and retry the upload  
-            youtube = get_authenticated_service() # This will prompt for re-authentication if necessary
-            video_response = initialize_upload(youtube, {
-                'file': video_path,
-                'title': title,
-                'description': description,
-                'category': category,
-                'keywords': keywords,
-                'privacyStatus': privacy_status
-            })
-            return video_response
+        raise e 
+
+def test_channel_connection(channel_name):
+    """Test connection to a YouTube channel"""
+    try:
+        print("\n=== Channel Connection Test ===")
+        
+        # Get the Backend directory path
+        backend_dir = os.path.dirname(os.path.abspath(__file__))
+        client_secret_path = os.path.join(backend_dir, 'client_secret.json')
+        
+        if not os.path.exists(client_secret_path):
+            print(colored(f"[-] client_secret.json not found at: {client_secret_path}", "red"))
+            print(colored("Please copy client_secret.json to the Backend directory", "yellow"))
+            return False
+            
+        # OAuth 2.0 credentials
+        SCOPES = [
+            'https://www.googleapis.com/auth/youtube.upload',
+            'https://www.googleapis.com/auth/youtube',
+            'https://www.googleapis.com/auth/youtubepartner'
+        ]
+        
+        # Create credentials flow
+        flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, SCOPES)
+        
+        # Get credentials
+        print(colored(f"[!] Please login with your {channel_name} channel...", "yellow"))
+        credentials = flow.run_local_server(port=0)
+        
+        # Build YouTube service
+        youtube = build('youtube', 'v3', credentials=credentials)
+        
+        # Get channel info
+        request = youtube.channels().list(
+            part="snippet,statistics",
+            mine=True
+        )
+        response = request.execute()
+        
+        if response['items']:
+            channel = response['items'][0]
+            print(colored(f"✓ Successfully connected to: {channel_name}", "green"))
+            print(colored(f"Channel Title: {channel['snippet']['title']}", "blue"))
+            print(colored(f"Subscriber Count: {channel['statistics']['subscriberCount']}", "blue"))
+            print(colored(f"Video Count: {channel['statistics']['videoCount']}", "blue"))
+            print(colored(f"Total Views: {channel['statistics']['viewCount']}", "blue"))
+            return True
         else:
-            raise e 
+            print(colored(f"✗ Failed to get channel info for: {channel_name}", "red"))
+            return False
+            
+    except Exception as e:
+        print(colored(f"✗ Failed to connect to: {channel_name}", "red"))
+        print(colored(f"Error: {str(e)}", "red"))
+        return False
+    finally:
+        print("===========================\n")
+
+def test_all_channels():
+    """Test connection to all configured YouTube channels."""
+    channels = ['main', 'business', 'gaming', 'tech']
+    results = {}
+    
+    print(colored("\nTesting YouTube Channel Connections...", "blue"))
+    
+    for channel in channels:
+        results[channel] = test_channel_connection(channel)
+    
+    print(colored("\nSummary:", "blue"))
+    for channel, success in results.items():
+        status = "✓" if success else "✗"
+        color = "green" if success else "red"
+        print(colored(f"{status} {channel.title()} Channel", color))
+    
+    return all(results.values()) 

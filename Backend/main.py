@@ -1,6 +1,7 @@
 import os
 from utils import *
 from dotenv import load_dotenv
+from tiktok_upload import TikTokUploader
 
 # Load environment variables
 load_dotenv("../.env")
@@ -15,7 +16,7 @@ from uuid import uuid4
 from tiktokvoice import *
 from flask_cors import CORS
 from termcolor import colored
-from youtube import upload_video
+from youtube import upload_video, test_channel_connection
 from apiclient.errors import HttpError
 from flask import Flask, request, jsonify
 from moviepy.config import change_settings
@@ -37,6 +38,16 @@ PORT = 8080
 AMOUNT_OF_STOCK_VIDEOS = 5
 GENERATING = False
 
+# Set environment variables
+TIKTOK_SESSION_ID = os.getenv("TIKTOK_SESSION_ID")  # This is used for TTS and default uploads
+
+# After the existing environment variables
+TIKTOK_SESSIONS = {
+    'main': os.getenv("TIKTOK_SESSION_ID"),  # Default session
+    'business': os.getenv("TIKTOK_SESSION_ID_BUSINESS", ""),
+    'gaming': os.getenv("TIKTOK_SESSION_ID_GAMING", ""),
+    'tech': os.getenv("TIKTOK_SESSION_ID_TECH", "")
+}
 
 # Generation Endpoint
 @app.route("/api/generate", methods=["POST"])
@@ -233,7 +244,7 @@ def generate():
             print(colored(f"[-] Error generating final video: {e}", "red"))
             final_video_path = None
 
-        # Define metadata for the video, we will display this to the user, and use it for the YouTube upload
+        # Define metadata for the video
         title, description, keywords = generate_metadata(data["videoSubject"], script, ai_model)
 
         print(colored("[-] Metadata for YouTube upload:", "blue"))
@@ -245,43 +256,69 @@ def generate():
         print(colored(f"  {', '.join(keywords)}", "blue"))
 
         if automate_youtube_upload:
-            # Start Youtube Uploader
-            # Check if the CLIENT_SECRETS_FILE exists
-            client_secrets_file = os.path.abspath("./client_secret.json")
-            SKIP_YT_UPLOAD = False
-            if not os.path.exists(client_secrets_file):
-                SKIP_YT_UPLOAD = True
-                print(colored("[-] Client secrets file missing. YouTube upload will be skipped.", "yellow"))
-                print(colored("[-] Please download the client_secret.json from Google Cloud Platform and store this inside the /Backend directory.", "red"))
-
-            # Only proceed with YouTube upload if the toggle is True  and client_secret.json exists.
-            if not SKIP_YT_UPLOAD:
-                # Choose the appropriate category ID for your videos
-                video_category_id = "28"  # Science & Technology
-                privacyStatus = "private"  # "public", "private", "unlisted"
+            try:
+                # Get selected YouTube channel
+                youtube_channel = data.get('youtubeAccount', 'main')
+                
                 video_metadata = {
                     'video_path': os.path.abspath(f"../temp/{final_video_path}"),
                     'title': title,
                     'description': description,
-                    'category': video_category_id,
+                    'category': "28",  # Science & Technology
                     'keywords': ",".join(keywords),
-                    'privacyStatus': privacyStatus,
+                    'privacy_status': "public",
                 }
 
-                # Upload the video to YouTube
-                try:
-                    # Unpack the video_metadata dictionary into individual arguments
-                    video_response = upload_video(
-                        video_path=video_metadata['video_path'],
-                        title=video_metadata['title'],
-                        description=video_metadata['description'],
-                        category=video_metadata['category'],
-                        keywords=video_metadata['keywords'],
-                        privacy_status=video_metadata['privacyStatus']
+                # Upload to selected YouTube channel
+                video_response = upload_video(
+                    **video_metadata,
+                    channel=youtube_channel  # Add channel parameter
+                )
+                
+                if video_response:
+                    print(colored(f"[+] Video uploaded to YouTube channel: {youtube_channel}", "green"))
+            except Exception as e:
+                print(colored(f"[-] YouTube upload error: {str(e)}", "red"))
+
+        # TikTok Upload
+        if data.get('automateTikTokUpload', False):
+            try:
+                # Get selected account type
+                account_type = data.get('tiktokAccount', 'main')
+                
+                # Get the corresponding session ID
+                session_map = {
+                    'main': os.getenv('TIKTOK_SESSION_ID'),
+                    'business': os.getenv('TIKTOK_SESSION_ID_BUSINESS'),
+                    'gaming': os.getenv('TIKTOK_SESSION_ID_GAMING'),
+                    'tech': os.getenv('TIKTOK_SESSION_ID_TECH')
+                }
+                
+                tiktok_session_id = session_map.get(account_type)
+                
+                if not tiktok_session_id:
+                    print(colored(f"[-] TikTok session ID not found for: {account_type}", "red"))
+                else:
+                    print(colored(f"[+] Uploading to TikTok channel: {account_type}", "blue"))
+                    uploader = TikTokUploader(tiktok_session_id)
+                    
+                    # Generate TikTok-appropriate tags
+                    tiktok_tags = uploader.generate_tiktok_tags(title, ",".join(keywords))
+                    
+                    # Upload to TikTok
+                    tiktok_response = uploader.upload_video(
+                        video_path=f"../temp/{final_video_path}",
+                        title=title[:150],  # TikTok title length limit
+                        tags=tiktok_tags
                     )
-                    print(f"Uploaded video ID: {video_response.get('id')}")
-                except HttpError as e:
-                    print(f"An HTTP error {e.resp.status} occurred:\n{e.content}")
+                    
+                    if tiktok_response:
+                        print(colored("[+] Video successfully uploaded to TikTok!", "green"))
+                    else:
+                        print(colored("[-] Failed to upload to TikTok", "red"))
+                        
+            except Exception as e:
+                print(colored(f"[-] TikTok upload error: {str(e)}", "red"))
 
         video_clip = VideoFileClip(f"../temp/{final_video_path}")
         if use_music:
@@ -346,6 +383,60 @@ def cancel():
     GENERATING = False
 
     return jsonify({"status": "success", "message": "Cancelled video generation."})
+
+
+@app.route("/api/tiktok-accounts", methods=["GET"])
+def get_tiktok_accounts():
+    # Only return accounts that have session IDs configured
+    available_accounts = [
+        {
+            'id': account,
+            'name': account.replace('_', ' ').title(),
+            'active': bool(session)
+        }
+        for account, session in TIKTOK_SESSIONS.items() 
+        if session  # Only include accounts with valid session IDs
+    ]
+    return jsonify({
+        "status": "success",
+        "accounts": available_accounts
+    })
+
+
+@app.route("/api/test-youtube", methods=["GET"])
+def test_youtube():
+    """Test YouTube channel connections."""
+    try:
+        # Get specific channel to test
+        channel = request.args.get('channel', None)
+        
+        if channel:
+            # Test specific channel
+            success = test_channel_connection(channel)
+            return jsonify({
+                "status": "success" if success else "error",
+                "message": f"YouTube {channel} channel test {'successful' if success else 'failed'}",
+                "channel": channel
+            })
+        else:
+            # Test all channels
+            results = {}
+            channels = ['main', 'business', 'gaming', 'tech']
+            
+            for ch in channels:
+                results[ch] = test_channel_connection(ch)
+            
+            return jsonify({
+                "status": "success",
+                "results": results,
+                "all_success": all(results.values())
+            })
+            
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Error testing YouTube channels: {str(e)}"
+        })
 
 
 if __name__ == "__main__":

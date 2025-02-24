@@ -11,6 +11,13 @@ const cancelButton = document.querySelector("#cancelButton");
 
 const advancedOptionsToggle = document.querySelector("#advancedOptionsToggle");
 
+// Add these with your other DOM element selections
+const tiktokUploadToggle = document.getElementById('tiktokUploadToggle');
+const tiktokAccount = document.getElementById('tiktokAccount');
+
+// Add with other DOM selections
+const youtubeAccount = document.getElementById('youtubeAccount');
+
 advancedOptionsToggle.addEventListener("click", () => {
   // Change Emoji, from ▼ to ▲ and vice versa
   const emoji = advancedOptionsToggle.textContent;
@@ -72,6 +79,9 @@ const generateVideo = () => {
   const subtitlesPosition = document.querySelector("#subtitlesPosition").value;
   const colorHexCode = document.querySelector("#subtitlesColor").value;
 
+  // Add TikTok options to your generate function
+  const tiktokUpload = tiktokUploadToggle.checked;
+  const tiktokAccountValue = tiktokAccount.value;
 
   const url = "http://localhost:8080/api/generate";
 
@@ -88,7 +98,16 @@ const generateVideo = () => {
     subtitlesPosition: subtitlesPosition,
     customPrompt: customPromptValue,
     color: colorHexCode,
+    automateTikTokUpload: tiktokUpload,
+    tiktokAccount: tiktokAccountValue,
+    youtubeAccount: youtubeAccount.value,
   };
+
+  // Save choices if the toggle is checked
+  if (tiktokUploadToggle.checked) {
+    localStorage.setItem('tiktokUploadToggle', tiktokUploadToggle.checked);
+    localStorage.setItem('tiktokAccount', tiktokAccountValue);
+  }
 
   // Send the actual request to the server
   fetch(url, {
@@ -131,11 +150,22 @@ document.addEventListener("DOMContentLoaded", (event) => {
   if (storedVoiceValue) {
     voiceSelect.value = storedVoiceValue;
   }
+
+  // Add TikTok options to your loadSavedChoices function
+  const savedTiktokUpload = localStorage.getItem('tiktokUploadToggle');
+  const savedTiktokAccount = localStorage.getItem('tiktokAccount');
+
+  if (savedTiktokUpload) {
+    tiktokUploadToggle.checked = savedTiktokUpload === 'true';
+  }
+  if (savedTiktokAccount) {
+    tiktokAccount.value = savedTiktokAccount;
+  }
 });
 
 // Save the data to localStorage when the user changes the value
-toggles = ["youtubeUploadToggle", "useMusicToggle", "reuseChoicesToggle"];
-fields = ["aiModel", "voice", "paragraphNumber", "videoSubject", "zipUrl", "customPrompt", "threads", "subtitlesPosition", "subtitlesColor"];
+toggles = ["youtubeUploadToggle", "useMusicToggle", "reuseChoicesToggle", "tiktokUploadToggle"];
+fields = ["aiModel", "voice", "paragraphNumber", "videoSubject", "zipUrl", "customPrompt", "threads", "subtitlesPosition", "subtitlesColor", "tiktokAccount"];
 
 document.addEventListener("DOMContentLoaded", () => {
   toggles.forEach((id) => {
@@ -146,7 +176,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (toggle && storedValue !== null && storedReuseValue === "true") {
         toggle.checked = storedValue === "true";
     }
-    // Attach change listener to update localStorage
+    // Attach change listener
     toggle.addEventListener("change", (event) => {
         localStorage.setItem(`${id}Value`, event.target.checked);
     });

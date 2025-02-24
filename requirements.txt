@@ -1,4 +1,4 @@
-g4f
+g4f==0.4.7.3
 setuptools
 wheel
 requests==2.31.0
@@ -17,5 +17,6 @@ assemblyai
 brotli
 google-api-python-client 
 oauth2client
-openai
+openai>=1.0.0
 google-generativeai
+schedule==1.2.0
