@@ -5,6 +5,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import time
+from typing import Tuple
 
 class ContentValidator:
     def __init__(self):
@@ -31,98 +32,93 @@ class ContentValidator:
     def validate_script(self, script, channel_type):
         """Validate script content and structure"""
         try:
-            # Check if we already have a valid script saved
-            cache_file = f"cache/scripts/{channel_type}_latest.json"
-            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+            # First clean up the script - handle line breaks properly
+            lines = []
+            for line in script.split('\n'):
+                line = line.strip()
+                if line and not line.startswith('['):  # Skip scene directions
+                    # Keep emojis with their lines
+                    if not any(line.startswith(c) for c in ['🏆', '☕️', '💻', '🚀', '✨']):
+                        lines.append(line)
+                    else:
+                        if lines:
+                            lines[-1] = lines[-1] + ' ' + line
+                        else:
+                            lines.append(line)
+
+            # Calculate metrics
+            total_words = sum(len(re.findall(r'\w+', line)) for line in lines)
+            estimated_duration = total_words * 0.4  # 0.4 seconds per word
+
+            # Print analysis
+            print(colored("\nScript Analysis:", "blue"))
+            print(colored(f"Lines: {len(lines)}", "cyan"))
+            print(colored(f"Words: {total_words}", "cyan"))
+            print(colored(f"Estimated Duration: {estimated_duration:.1f}s", "cyan"))
             
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r') as f:
-                    cached = json.load(f)
-                    if cached.get('is_valid'):
-                        print(colored("Using cached valid script", "green"))
-                        return True, cached['script']
+            # Print the processed script
+            print(colored("\nProcessed Script:", "blue"))
+            for i, line in enumerate(lines, 1):
+                print(colored(f"{i}. {line}", "cyan"))
 
-            # If no valid cache, proceed with validation
-            word_count = len(script.split())
-            if word_count < self.standards['min_words']:
-                return False, "Script too short"
-            if word_count > self.standards['max_words']:
-                return False, "Script too long"
-
-            # Validate script structure using GPT-4
-            prompt = f"""
-            Analyze this script for a {channel_type} video and check for:
-            1. Clear hook in first 5 seconds
-            2. Logical flow and structure
-            3. Complete thoughts and explanations
-            4. Strong conclusion
-            5. Clear call-to-action
-            6. Estimated video duration
-            7. Overall quality and engagement potential
-
-            Script:
-            {script}
-
-            Provide analysis in JSON format with these keys:
-            - has_hook (boolean)
-            - has_structure (boolean)
-            - is_complete (boolean)
-            - has_conclusion (boolean)
-            - has_cta (boolean)
-            - estimated_duration (number in seconds)
-            - quality_score (1-10)
-            - issues (array of strings)
-            - suggestions (array of strings)
-            """
-
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a video script analyzer."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-
-            analysis = json.loads(response.choices[0].message.content)
+            # More flexible validation
+            if estimated_duration > 120:  # Allow up to 2 minutes but warn
+                print(colored(f"\nWarning: Script duration ({estimated_duration:.1f}s) is longer than ideal for shorts", "yellow"))
             
-            # Check if meets all requirements
-            meets_requirements = (
-                analysis['has_hook'] and
-                analysis['has_structure'] and
-                analysis['is_complete'] and
-                analysis['has_conclusion'] and
-                analysis['has_cta'] and
-                analysis['quality_score'] >= 8
-            )
+            # Check for minimum content and emojis
+            if total_words < 30:
+                return False, {"message": "Script too short, need at least 30 words"}
 
-            if not meets_requirements:
-                return False, {
-                    'analysis': analysis,
-                    'message': "Script doesn't meet quality standards"
-                }
+            emoji_count = sum(1 for line in lines if any(emoji in line for emoji in 
+                ['☕️', '💻', '🚀', '✨', '🔥', '🎯', '💡', '🤖', '👨‍💻', '👩‍💻', '🎉', '🌟']))
+            if emoji_count < 2:
+                return False, {"message": "Script must include at least 2 emojis"}
 
-            # Check duration
-            duration_range = self.standards['ideal_duration']['shorts']
-            if not (duration_range[0] <= analysis['estimated_duration'] <= duration_range[1]):
-                return False, {
-                    'analysis': analysis,
-                    'message': f"Duration ({analysis['estimated_duration']}s) outside ideal range {duration_range}"
-                }
+            # Save successful scripts for learning
+            if 25 <= estimated_duration <= 65:  # This is our ideal range
+                self._save_successful_script(channel_type, script, {
+                    "duration": estimated_duration,
+                    "words": total_words,
+                    "lines": len(lines),
+                    "emoji_count": emoji_count
+                })
 
-            # If valid, cache the script
-            if meets_requirements:
-                with open(cache_file, 'w') as f:
-                    json.dump({
-                        'is_valid': True,
-                        'script': script,
-                        'timestamp': time.time()
-                    }, f)
-
-            return meets_requirements, analysis
+            return True, {
+                "lines": len(lines),
+                "words": total_words,
+                "estimated_duration": estimated_duration,
+                "is_ideal_length": 25 <= estimated_duration <= 65
+            }
 
         except Exception as e:
             print(colored(f"Error validating script: {str(e)}", "red"))
             return False, str(e)
+
+    def _save_successful_script(self, channel_type: str, script: str, metrics: dict):
+        """Save successful scripts to learn from"""
+        try:
+            cache_file = f"cache/scripts/{channel_type}_successful.json"
+            os.makedirs("cache/scripts", exist_ok=True)
+            
+            successful_scripts = []
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r') as f:
+                    successful_scripts = json.load(f)
+            
+            successful_scripts.append({
+                'script': script,
+                'metrics': metrics,
+                'timestamp': time.time()
+            })
+            
+            # Keep last 20 successful scripts
+            successful_scripts = successful_scripts[-20:]
+            
+            with open(cache_file, 'w') as f:
+                json.dump(successful_scripts, f, indent=2)
+                
+        except Exception as e:
+            print(colored(f"Error saving successful script: {str(e)}", "yellow"))
 
     def estimate_video_length(self, script):
         """Estimate video length based on word count and pacing"""
@@ -195,111 +191,94 @@ class ContentValidator:
 class ScriptGenerator:
     def __init__(self):
         load_dotenv()
-        self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        self.validator = ContentValidator()
-        
-        # Define model options with costs per 1K tokens
+        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         self.models = {
-            'o1_premium': {
-                'name': 'gpt-4-0125-preview',  # O1 model
-                'cost': 0.08,
-                'client': 'openai',
-                'max_tokens': 4096
+            'primary': 'gpt-4-turbo-preview',  # Latest GPT-4 Turbo model
+            'fallback': 'gpt-3.5-turbo'  # Cost-effective fallback
+        }
+        self.cost_per_token = {
+            'gpt-4-turbo-preview': {
+                'input': 0.00001,   # $0.01 per 1K tokens
+                'output': 0.00003   # $0.03 per 1K tokens
             },
-            'gpt4_turbo': {
-                'name': 'gpt-4-1106-preview',
-                'cost': 0.03,
-                'client': 'openai',
-                'max_tokens': 4096
+            'gpt-3.5-turbo': {
+                'input': 0.000001,  # $0.001 per 1K tokens
+                'output': 0.000002  # $0.002 per 1K tokens
             }
         }
-        
-        # Set O1 as primary model and GPT-4 Turbo as fallback
-        self.primary_model = self.models['o1_premium']
-        self.fallback_model = self.models['gpt4_turbo']
+        self.total_cost = 0
 
-    async def generate_script(self, topic, channel_type, use_premium=True, retry_count=3):
-        """Generate script using O1 with GPT-4 Turbo fallback"""
-        prompt = self.get_enhanced_prompt(topic, channel_type)
-        
-        for attempt in range(retry_count):
-            try:
-                model = self.primary_model if use_premium else self.fallback_model
-                print(colored(f"Using {model['name']} for content generation", "blue"))
-                
-                response = self.openai_client.chat.completions.create(
-                    model=model['name'],
-                    messages=[
-                        {"role": "system", "content": self.get_system_prompt(channel_type)},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.7,
-                    max_tokens=model['max_tokens'],
-                    top_p=0.9
-                )
-                script = response.choices[0].message.content
+    def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost of API call"""
+        model_costs = self.cost_per_token.get(model, self.cost_per_token['gpt-3.5-turbo'])
+        input_cost = input_tokens * model_costs['input']
+        output_cost = output_tokens * model_costs['output']
+        total = input_cost + output_cost
+        self.total_cost += total
+        return total
 
-                # Validate script
-                is_valid, validation_result = self.validator.validate_script(script, channel_type)
-                
-                if is_valid:
-                    # Track usage for cost monitoring
-                    self.track_usage(script, use_premium)
-                    return True, script
-                else:
-                    print(colored(f"Attempt {attempt + 1}: {validation_result['message']}", "yellow"))
-                    
-                    # If primary model fails, try improvement
-                    if attempt == retry_count - 2:
-                        print(colored("Trying to improve script...", "yellow"))
-                        improved_script = await self.improve_script(script, channel_type)
-                        if improved_script:
-                            return True, improved_script
-
-            except Exception as e:
-                print(colored(f"Error generating script: {str(e)}", "red"))
-                
-        return False, "Failed to generate valid script after multiple attempts"
-
-    async def improve_script(self, original_script, channel_type):
-        """Use O1's reasoning to improve the script"""
+    async def generate_script(self, topic: str, channel_type: str) -> Tuple[bool, str]:
+        """Generate an engaging script for short-form video"""
         try:
-            improvement_prompt = f"""
-            Analyze and improve this script for maximum engagement and quality:
-
-            Original Script:
-            {original_script}
-
-            Please:
-            1. Enhance the hook to be more captivating
-            2. Improve the flow and pacing
-            3. Make the language more natural and conversational
-            4. Strengthen the emotional connection
-            5. Make the call-to-action more compelling
-
-            Maintain the same basic structure but make it more engaging and authentic.
-            """
-
-            response = self.openai_client.chat.completions.create(
-                model=self.primary_model['name'],
+            # Get enhanced system prompt for O1
+            system_prompt = self.get_system_prompt(channel_type)
+            
+            # Get channel-specific prompt
+            content_prompt = self.get_channel_prompt(channel_type, topic)
+            
+            response = self.client.chat.completions.create(
+                model=self.models['primary'],
                 messages=[
-                    {"role": "system", "content": "You are an expert script editor focused on engagement and authenticity."},
-                    {"role": "user", "content": improvement_prompt}
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content_prompt}
                 ],
-                temperature=0.7,
-                max_tokens=self.primary_model['max_tokens']
+                temperature=0.7
             )
-
-            improved_script = response.choices[0].message.content
-            is_valid, validation_result = self.validator.validate_script(improved_script, channel_type)
+            
+            # Calculate and log cost
+            cost = self._calculate_cost(
+                response.model,
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens
+            )
+            print(colored(f"\nAPI Cost: ${cost:.4f}", "yellow"))
+            print(colored(f"Total Cost: ${self.total_cost:.4f}", "yellow"))
+            
+            script = response.choices[0].message.content.strip()
+            
+            # Validate script
+            validator = ContentValidator()
+            is_valid, analysis = validator.validate_script(script, channel_type)
             
             if is_valid:
-                return improved_script
-            return None
+                print(colored("\nGenerated Script:", "green"))
+                print(colored(script, "cyan"))
+                print(colored(f"\nEstimated Duration: {analysis.get('estimated_duration', 0):.1f}s", "blue"))
+                return True, script
+            
+            # If primary model fails, try fallback
+            print(colored("\nTrying fallback model...", "yellow"))
+            response = self.client.chat.completions.create(
+                model=self.models['fallback'],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content_prompt}
+                ],
+                temperature=0.7
+            )
+            
+            script = response.choices[0].message.content.strip()
+            is_valid, analysis = validator.validate_script(script, channel_type)
+            
+            if is_valid:
+                return True, script
+                
+            print(colored(f"Script validation failed: {analysis.get('message', 'Unknown error')}", "yellow"))
+            return False, None
 
         except Exception as e:
-            print(colored(f"Error improving script: {str(e)}", "red"))
-            return None
+            print(colored(f"Error generating script: {str(e)}", "red"))
+            return False, None
 
     def track_usage(self, script, is_premium):
         """Track token usage and estimated costs"""
@@ -456,97 +435,50 @@ Style Guidelines:
         return enhanced_prompt
 
     def get_channel_prompt(self, channel_type, topic):
-        """Get channel-specific prompt template"""
-        prompts = {
-            'tech_humor': """
-                Create an engaging and humorous script about {topic}.
-                Requirements:
-                - Hook: Funny tech situation or relatable coding moment
-                - At least 3 jokes/punchlines
-                - Mix technical accuracy with humor
-                - Use analogies for complex concepts
-                - Keep technical terms under 5
-                - 45-60 seconds length
-                - End: Funny conclusion + subscribe CTA
-                
-                Format:
-                [Hook - 5s]
-                [Setup - 15s]
-                [Technical Explanation with Jokes - 25s]
-                [Punchline - 10s]
-                [Call to action - 5s]
-            """,
-            'ai_money': """
-                Create an informative script about {topic}.
-                Requirements:
-                - Hook: Specific earning example
-                - 3 clear, actionable steps
-                - Include real numbers and timeframes
-                - Address common obstacles
-                - Show proof/results
-                - 45-60 seconds length
-                - End: Value proposition + CTA
-                
-                Format:
-                [Hook with Proof - 10s]
-                [Problem/Market Gap - 10s]
-                [3 Steps with Details - 30s]
-                [Results/Timeline - 5s]
-                [Call to action - 5s]
-            """,
-            'baby_tips': """
-                Create a helpful parenting script about {topic}.
-                Requirements:
-                - Hook: Common parenting challenge
-                - Safety-first approach
-                - Expert-backed tips
-                - Include medical disclaimer
-                - Address common concerns
-                - 45-60 seconds length
-                - End: Supportive message + CTA
-                
-                Format:
-                [Hook/Problem - 10s]
-                [Safety Note - 5s]
-                [Solution Steps - 35s]
-                [Tips & Warnings - 5s]
-                [Call to action - 5s]
-            """,
-            'quick_meals': """
-                Create a recipe script about {topic}.
-                Requirements:
-                - Hook: Final dish appeal
-                - Max 10 ingredients
-                - 15-minute prep time
-                - Include nutrition basics
-                - Time-saving tips
-                - 45-60 seconds length
-                - End: Serving suggestion + CTA
-                
-                Format:
-                [Hook/Final Result - 5s]
-                [Ingredients List - 10s]
-                [Step-by-Step - 35s]
-                [Tips & Nutrition - 5s]
-                [Call to action - 5s]
-            """,
-            'fitness_motivation': """
-                Create a workout script about {topic}.
-                Requirements:
-                - Hook: Benefit/Transformation
-                - Safety instructions
-                - Form guidance
-                - Modification options
-                - Motivation elements
-                - 45-60 seconds length
-                - End: Motivation + CTA
-                
-                Format:
-                [Hook/Benefits - 10s]
-                [Safety & Form - 10s]
-                [Workout Steps - 30s]
-                [Motivation - 5s]
-                [Call to action - 5s]
-            """
-        }
-        return prompts.get(channel_type, "").format(topic=topic) 
+        """Get channel-specific prompt template with examples from successful scripts"""
+        base_prompt = """
+            Create an engaging script about {topic} for short-form video.
+
+            GUIDELINES (not strict rules):
+            - Aim for 50-100 words total
+            - Use 7-10 clear points/lines
+            - Add relevant emojis to enhance key points
+            - Focus on engagement over exact timing
+            - Keep each point clear and impactful
+
+            Structure:
+            1. Hook question/statement
+            2. Quick engaging answer
+            3-6. Main points with humor/value
+            7. Surprising twist or revelation
+            8. Clear call to action
+
+            Example Format:
+            Ever wondered why programmers debug with rubber ducks? 🦆
+            These squeaky friends are our secret debugging tool! 💻
+            Explaining code to ducks makes bugs magically appear! ✨
+            Ducks never judge your messy code or variable names! 🤫
+            They're the only ones who understand our loops! 🔄
+            Plot twist: The ducks are actually coding experts! ��
+            Follow for more dev secrets and duck debugging! 🚀
+        """
+
+        # Add successful examples if available
+        successful_scripts = self._load_successful_scripts(channel_type)
+        if successful_scripts:
+            best_script = successful_scripts[-1]['script']
+            base_prompt += f"\n\nHere's another successful example:\n{best_script}"
+
+        return base_prompt.format(topic=topic)
+
+    def _load_successful_scripts(self, channel_type: str) -> list:
+        """Load previously successful scripts"""
+        try:
+            cache_file = f"cache/scripts/{channel_type}_successful.json"
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r') as f:
+                    return json.load(f)
+            return []
+        except Exception as e:
+            print(colored(f"Error loading successful scripts: {str(e)}", "yellow"))
+            return [] 

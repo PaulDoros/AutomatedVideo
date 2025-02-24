@@ -4,10 +4,11 @@ from tiktok_upload import TikTokUploader
 import os
 from termcolor import colored
 from content_validator import ContentValidator, ScriptGenerator
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip
+from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips
 from moviepy.video.tools.subtitles import SubtitlesClip
-from tiktokvoice import tts  # Change this import
+from tiktokvoice import tts
 from video import generate_video, generate_subtitles, combine_videos, save_video
+from test_content_quality import ContentQualityChecker
 import json
 import time
 from datetime import datetime
@@ -21,6 +22,27 @@ import random
 import shutil
 from search import search_for_stock_videos  # Add this import
 from dotenv import load_dotenv
+import uuid
+import re
+
+# Third-party imports
+try:
+    from TTS.api import TTS
+except ImportError:
+    print("Please install TTS: pip install TTS")
+    TTS = None
+
+try:
+    import torch
+except ImportError:
+    print("Please install PyTorch: pip install torch")
+    torch = None
+
+try:
+    from scipy.io import wavfile
+except ImportError:
+    print("Please install SciPy: pip install scipy")
+    wavfile = None
 
 async def generate_tts(text, voice, output_path):
     """Generate TTS using TikTok voice"""
@@ -54,6 +76,73 @@ class VideoGenerator:
 
         load_dotenv()
         self.pexels_api_key = os.getenv('PEXELS_API_KEY')
+        self.content_checker = ContentQualityChecker()
+
+        # Create necessary directories
+        self.dirs = {
+            'temp': {
+                'videos': ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation'],
+                'tts': [],
+                'subtitles': []
+            },
+            'output': {
+                'videos': []
+            },
+            'assets': {
+                'videos': ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation'],
+                'music': ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation'],
+                'fonts': []
+            }
+        }
+        
+        self._create_directories()
+
+        # Check required packages
+        if None in (TTS, torch, wavfile):
+            raise ImportError(
+                "Missing required packages. Please install:\n"
+                "pip install TTS torch scipy"
+            )
+
+        # Initialize Coqui TTS only once
+        tts_model_path = "assets/tts/model"
+        os.makedirs(os.path.dirname(tts_model_path), exist_ok=True)
+
+        # Fix PyTorch "weights only" issue
+        torch.serialization.default_load_weights_only = False
+        torch.serialization.add_safe_globals(["numpy.core.multiarray.scalar"])
+
+        # Define voice model
+        MODEL_NAME = "tts_models/en/vctk/vits"
+        
+        print(colored("Loading TTS model...", "blue"))
+        self.tts = TTS(
+            model_name=MODEL_NAME,
+            progress_bar=False,
+            gpu=torch.cuda.is_available()
+        )
+        
+        # Set speaker for multi-speaker model
+        if hasattr(self.tts, 'speakers') and len(self.tts.speakers) > 0:
+            self.tts.speaker = "p273"  # Male voice with good clarity
+
+    def _create_directories(self):
+        """Create all necessary directories"""
+        try:
+            for main_dir, sub_dirs in self.dirs.items():
+                for sub_dir, channels in sub_dirs.items():
+                    # Create base directory
+                    base_path = f"{main_dir}/{sub_dir}"
+                    os.makedirs(base_path, exist_ok=True)
+                    
+                    # Create channel-specific subdirectories if any
+                    for channel in channels:
+                        os.makedirs(f"{base_path}/{channel}", exist_ok=True)
+                        
+            print(colored("✓ Directory structure created", "green"))
+            
+        except Exception as e:
+            print(colored(f"Error creating directories: {str(e)}", "red"))
 
     def generate_video_for_channel(self, channel, topic, hashtags):
         """Generate and validate video content"""
@@ -144,147 +233,224 @@ class VideoGenerator:
         try:
             print(colored("\n=== Video Generation Started ===", "blue"))
             
-            # Create all necessary directories
-            os.makedirs("temp/tts", exist_ok=True)
-            os.makedirs("temp/subtitles", exist_ok=True)
-            os.makedirs("temp/videos", exist_ok=True)
-            os.makedirs("output/videos", exist_ok=True)
-            
             # Load script
-            with open(script_file, 'r') as f:
+            with open(script_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 script = data.get('script', '')
-                preview = data.get('preview', '')
             
             if not script:
                 raise ValueError("Script is empty")
+
+            # Generate components
+            tts_path = await self._generate_tts(script, channel_type)
+            if not tts_path:
+                raise ValueError("Failed to generate TTS audio")
             
-            # Define paths
-            tts_path = f"temp/tts/{channel_type}_latest.mp3"
-            subtitles_path = f"temp/subtitles/{channel_type}_latest.srt"
-            combined_video_path = f"temp/videos/{channel_type}_combined.mp4"
+            subtitles_path = await self._generate_subtitles(script, tts_path, channel_type)
+            if not subtitles_path:
+                raise ValueError("Failed to generate subtitles")
             
-            # 1. Generate TTS audio
-            print(colored("\nGenerating TTS audio...", "blue"))
-            voice_config = self.get_voice_for_channel(channel_type)
-            success, audio_clips = await generate_tts(
-                text=script if not preview else preview,
-                voice=voice_config['voice'],
-                output_path=tts_path
-            )
-            if not success:
-                raise Exception("TTS generation failed")
-            print(colored("✓ TTS generated", "green"))
+            background_paths = await self._process_background_videos(channel_type)
+            if not background_paths:
+                raise ValueError("Failed to get background videos")
             
-            # 2. Generate subtitles
-            print(colored("\nGenerating subtitles...", "blue"))
-            sentences = (script if not preview else preview).split('\n')
-            subtitles = generate_subtitles(
-                audio_path=tts_path,
-                sentences=sentences,
-                audio_clips=audio_clips,
-                voice=voice_config['lang']
-            )
-            if not subtitles:
-                raise Exception("Subtitles generation failed")
+            # Ensure we have a list of background paths
+            if isinstance(background_paths, str):
+                background_paths = [background_paths]
             
-            # Copy subtitles to expected location
-            shutil.copy2(subtitles, subtitles_path)
-            print(colored("✓ Subtitles generated", "green"))
-
-            # 3. Download and combine background videos
-            print(colored("\nDownloading background videos...", "blue"))
-            # Get video duration from audio
-            audio_clip = AudioFileClip(tts_path)
-            video_duration = audio_clip.duration
-            audio_clip.close()
-
-            # Search for relevant background videos
-            search_terms = {
-                'tech_humor': ['programming', 'coding', 'computer', 'technology'],
-                'ai_money': ['business', 'computer', 'technology', 'success'],
-                'baby_tips': ['baby', 'parenting', 'family', 'children'],
-                'quick_meals': ['cooking', 'food', 'kitchen', 'healthy'],
-                'fitness_motivation': ['workout', 'fitness', 'exercise', 'gym']
-            }
-
-            terms = search_terms.get(channel_type, ['background', 'abstract'])
-            video_urls = []
-            for term in terms:
-                urls = search_for_stock_videos(
-                    query=term,
-                    api_key=self.pexels_api_key,
-                    it=2,
-                    min_dur=3
-                )
-                video_urls.extend(urls)
-                if len(video_urls) >= 4:
-                    break
-
-            if not video_urls:
-                raise Exception("No background videos found")
-
-            # Download videos to temp/videos directory
-            video_paths = []
-            for url in video_urls:
-                video_path = save_video(url, "temp/videos")
-                video_paths.append(video_path)
-
-            print(colored(f"✓ Downloaded {len(video_paths)} background videos", "green"))
-
-            # Combine videos
-            print(colored("\nCombining background videos...", "blue"))
-            combined_video = combine_videos(
-                video_paths=video_paths,
-                max_duration=video_duration,
-                max_clip_duration=10,
-                threads=8
+            # Generate final video
+            output_path = generate_video(
+                background_paths[0] if len(background_paths) == 1 else background_paths,
+                tts_path,
+                subtitles_path
             )
             
-            if not combined_video:
-                raise Exception("Failed to combine background videos")
+            if not output_path:
+                raise ValueError("Failed to generate final video")
             
-            # Move combined video to expected location
-            shutil.move(combined_video, combined_video_path)
-            print(colored("✓ Background videos combined", "green"))
-            
-            # 4. Generate final video
-            print(colored("\nGenerating final video...", "blue"))
-            params = {
-                'combined_video_path': combined_video_path,
-                'tts_path': tts_path,
-                'subtitles_path': subtitles_path,
-                'threads': 8,
-                'subtitles_position': 'center,bottom',
-                'text_color': 'white'
-            }
-            
-            video_path = generate_video(**params)
-            
-            if not video_path:
-                raise Exception("Video generation failed")
-            
-            # Generate unique filename and save
+            # Save output
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = f"{channel_type}_{timestamp}.mp4"
-            output_path = os.path.join("output/videos", output_filename)
-            latest_path = os.path.join("output/videos", f"{channel_type}_latest.mp4")
-            
-            # Move video to output directory
-            shutil.move(os.path.join("temp", video_path), output_path)
-            
-            # Update latest version
-            if os.path.exists(latest_path):
-                os.remove(latest_path)
-            os.link(output_path, latest_path)
+            final_path = f"output/videos/{channel_type}_{timestamp}.mp4"
+            os.makedirs(os.path.dirname(final_path), exist_ok=True)
+            shutil.copy2(output_path, final_path)
             
             print(colored("\n=== Video Generation Complete ===", "green"))
-            print(colored(f"✓ Saved as: {output_filename}", "green"))
             return True
             
         except Exception as e:
             print(colored(f"\n=== Video Generation Failed ===\nError: {str(e)}", "red"))
             return False
+
+    async def _generate_tts(self, script, channel_type):
+        """Generate TTS using Coqui"""
+        try:
+            tts_path = f"temp/tts/{channel_type}_latest.mp3"
+            os.makedirs(os.path.dirname(tts_path), exist_ok=True)
+            
+            sentences = []
+            for line in script.split('\n'):
+                clean_line = re.sub(r'[^\x00-\x7F]+', '', line).strip()
+                if clean_line:
+                    sentences.append(clean_line)
+            
+            audio_clips = []
+            timings = []
+            current_time = 0
+            
+            for sentence in sentences:
+                temp_path = f"temp/tts/temp_{uuid.uuid4()}.wav"
+                try:
+                    # Generate audio
+                    if hasattr(self.tts, 'speakers') and len(self.tts.speakers) > 0:
+                        self.tts.tts_to_file(text=sentence, file_path=temp_path, speaker=self.tts.speaker)
+                    else:
+                        self.tts.tts_to_file(text=sentence, file_path=temp_path)
+                    
+                    # Wait a bit to ensure file is released
+                    await asyncio.sleep(0.1)
+                    
+                    # Load audio only after ensuring file is written
+                    if os.path.exists(temp_path):
+                        audio_clip = AudioFileClip(temp_path)
+                        audio_clips.append(audio_clip)
+                        
+                        duration = audio_clip.duration
+                        timings.append({
+                            'text': sentence,
+                            'start': current_time,
+                            'end': current_time + duration
+                        })
+                        current_time += duration
+                except Exception as e:
+                    print(colored(f"Warning: Failed to process sentence: {e}", "yellow"))
+                finally:
+                    # Clean up temp file with retry
+                    for _ in range(3):
+                        try:
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            break
+                        except:
+                            await asyncio.sleep(0.1)
+            
+            if not audio_clips:
+                raise ValueError("No audio clips were generated")
+            
+            # Combine all audio clips
+            final_audio = concatenate_audioclips(audio_clips)
+            final_audio.write_audiofile(tts_path, fps=44100)
+            
+            # Clean up
+            for clip in audio_clips:
+                clip.close()
+            
+            self.sentence_timings = timings
+            return tts_path
+            
+        except Exception as e:
+            print(colored(f"TTS generation failed: {str(e)}", "red"))
+            return None
+
+    async def _generate_subtitles(self, script, tts_path, channel_type):
+        """Generate subtitles using stored timings"""
+        try:
+            if not tts_path or not os.path.exists(tts_path):
+                raise ValueError("Invalid TTS audio path")
+            
+            if not hasattr(self, 'sentence_timings'):
+                raise ValueError("No timing information available")
+            
+            subtitles_path = f"temp/subtitles/{channel_type}_latest.srt"
+            os.makedirs(os.path.dirname(subtitles_path), exist_ok=True)
+            
+            # Use utf-8 encoding for writing subtitles
+            with open(subtitles_path, 'w', encoding='utf-8') as f:
+                for i, timing in enumerate(self.sentence_timings, 1):
+                    f.write(f"{i}\n")
+                    f.write(f"{self._format_time(timing['start'])} --> {self._format_time(timing['end'])}\n")
+                    f.write(f"{timing['text']}\n\n")
+            
+            return subtitles_path
+            
+        except Exception as e:
+            print(colored(f"Subtitles generation failed: {str(e)}", "red"))
+            return None
+
+    def _format_time(self, seconds):
+        """Format time for subtitles"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        seconds = seconds % 60
+        milliseconds = int((seconds % 1) * 1000)
+        seconds = int(seconds)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+    async def _process_background_videos(self, channel_type):
+        """Process background videos for the channel"""
+        try:
+            # First check for local background videos
+            local_path = os.path.join("assets", "videos", channel_type)
+            if os.path.exists(local_path):
+                videos = [f for f in os.listdir(local_path) if f.endswith(('.mp4', '.mov'))]
+                if videos:
+                    # Convert to absolute paths
+                    video_paths = [os.path.abspath(os.path.join(local_path, v)) for v in videos]
+                    print(colored(f"Using {len(video_paths)} local videos from {local_path}", "green"))
+                    return video_paths
+
+            # Then try to get videos from Pexels
+            search_terms = {
+                'tech_humor': ['programming', 'coding', 'computer', 'technology'],
+                'ai_money': ['business', 'success', 'technology', 'future'],
+                'baby_tips': ['baby', 'parenting', 'family', 'children'],
+                'quick_meals': ['cooking', 'food', 'kitchen', 'recipe'],
+                'fitness_motivation': ['fitness', 'workout', 'exercise', 'gym']
+            }
+            
+            terms = search_terms.get(channel_type, ['background', 'abstract'])
+            video_urls = []
+            
+            # Create channel directory if it doesn't exist
+            channel_dir = os.path.join("assets", "videos", channel_type)
+            os.makedirs(channel_dir, exist_ok=True)
+            
+            for term in terms:
+                try:
+                    urls = search_for_stock_videos(
+                        query=term,
+                        api_key=self.pexels_api_key,
+                        it=2,
+                        min_dur=3
+                    )
+                    if urls:
+                        for url in urls:
+                            # Save directly to channel directory
+                            saved_path = save_video(url, channel_dir)
+                            if saved_path:
+                                video_urls.append(saved_path)
+                    
+                    if len(video_urls) >= 4:
+                        break
+                    
+                except Exception as e:
+                    print(colored(f"Warning: Search failed for '{term}': {str(e)}", "yellow"))
+                    continue
+            
+            if video_urls:
+                return video_urls
+            
+            # If no videos found, create and use a default background
+            default_path = os.path.join("assets", "videos", "default_background.mp4")
+            if not os.path.exists(default_path):
+                os.makedirs(os.path.dirname(default_path), exist_ok=True)
+                from moviepy.editor import ColorClip
+                clip = ColorClip(size=(1920, 1080), color=(0, 0, 0), duration=60)
+                clip.write_videofile(default_path, fps=30)
+            return [default_path]
+            
+        except Exception as e:
+            print(colored(f"Background video processing failed: {str(e)}", "red"))
+            return None
 
     def create_section_clip(self, index, title, content, total_sections):
         """Create a clip for a section (runs in parallel)"""
