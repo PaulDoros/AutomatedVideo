@@ -20,3 +20,5 @@ oauth2client
 openai>=1.0.0
 google-generativeai
 schedule==1.2.0
+opencv-python==4.8.0.74
+numpy>=1.24.0

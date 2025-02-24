@@ -1,0 +1,25 @@
+{
+  "last_reset": "2025-02-24",
+  "channels": {
+    "tech_humor": {
+      "used": 0,
+      "remaining": 10000
+    },
+    "ai_money": {
+      "used": 0,
+      "remaining": 10000
+    },
+    "baby_tips": {
+      "used": 0,
+      "remaining": 10000
+    },
+    "quick_meals": {
+      "used": 0,
+      "remaining": 10000
+    },
+    "fitness_motivation": {
+      "used": 0,
+      "remaining": 10000
+    }
+  }
+}

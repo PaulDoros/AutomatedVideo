@@ -1,9 +1,12 @@
 from content_validator import ContentValidator, ScriptGenerator
 from thumbnail_validator import ThumbnailValidator
+from thumbnail_generator import ThumbnailGenerator
 from termcolor import colored
 import os
+import asyncio
+import json
 
-def test_script_generation():
+async def test_script_generation():
     """Test script generation and validation for each channel"""
     generator = ScriptGenerator()
     channels = ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
@@ -13,8 +16,19 @@ def test_script_generation():
     for channel in channels:
         print(colored(f"\nTesting {channel} channel:", "blue"))
         
-        # Test script generation
-        success, script = generator.generate_script(
+        # Check cache first
+        cache_file = f"cache/scripts/{channel}_latest.json"
+        if os.path.exists(cache_file):
+            with open(cache_file, 'r') as f:
+                cached = json.load(f)
+                if cached.get('is_valid'):
+                    print(colored("✓ Using cached valid script", "green"))
+                    print(colored("Script preview:", "yellow"))
+                    print(cached['script'][:200] + "...")
+                    continue
+        
+        # Only generate new if no valid cache exists
+        success, script = await generator.generate_script(
             topic=f"Test topic for {channel}",
             channel_type=channel
         )
@@ -28,13 +42,17 @@ def test_script_generation():
 
 def test_thumbnail_generation():
     """Test thumbnail generation and validation"""
+    # First generate test thumbnails
+    generator = ThumbnailGenerator()
+    generator.generate_test_thumbnails()
+    
     validator = ThumbnailValidator()
     test_thumbnails = {
-        'tech_humor': 'test_thumbnails/tech.jpg',
-        'ai_money': 'test_thumbnails/money.jpg',
-        'baby_tips': 'test_thumbnails/baby.jpg',
-        'quick_meals': 'test_thumbnails/food.jpg',
-        'fitness_motivation': 'test_thumbnails/fitness.jpg'
+        'tech_humor': 'test_thumbnails/tech_humor.jpg',
+        'ai_money': 'test_thumbnails/ai_money.jpg',
+        'baby_tips': 'test_thumbnails/baby_tips.jpg',
+        'quick_meals': 'test_thumbnails/quick_meals.jpg',
+        'fitness_motivation': 'test_thumbnails/fitness_motivation.jpg'
     }
     
     print(colored("\n=== Testing Thumbnail Validation ===", "blue"))
@@ -49,14 +67,14 @@ def test_thumbnail_generation():
         else:
             print(colored("✗ Test thumbnail not found", "red"))
 
-def main():
+async def main():
     print(colored("=== Content Quality Test Suite ===", "blue"))
     
     # Test script generation
-    test_script_generation()
+    await test_script_generation()
     
     # Test thumbnail validation
     test_thumbnail_generation()
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 

@@ -18,7 +18,7 @@ load_dotenv("../.env")
 ASSEMBLY_AI_API_KEY = os.getenv("ASSEMBLY_AI_API_KEY")
 
 
-def save_video(video_url: str, directory: str = "../temp") -> str:
+def save_video(video_url: str, directory: str = "temp") -> str:
     """
     Saves a video from a given URL and returns the path to the video.
 
@@ -43,22 +43,32 @@ def __generate_subtitles_assemblyai(audio_path: str, voice: str) -> str:
 
     Args:
         audio_path (str): The path to the audio file to generate subtitles from.
+        voice (str): The voice code used for TTS
 
     Returns:
         str: The generated subtitles
     """
 
+    # Map TikTok voice codes to AssemblyAI language codes
     language_mapping = {
-        "br": "pt",
-        "id": "en", #AssemblyAI doesn't have Indonesian 
-        "jp": "ja",
-        "kr": "ko",
+        # English voices
+        'en_us_001': 'en',
+        'en_us_002': 'en',
+        'en_us_006': 'en',
+        'en_us_009': 'en',
+        'en_us_010': 'en',
+        'en_male_narration': 'en',
+        'en_female_ht': 'en',
+        
+        # Other languages
+        'br': 'pt',
+        'id': 'en',  # AssemblyAI doesn't have Indonesian 
+        'jp': 'ja',
+        'kr': 'ko',
     }
 
-    if voice in language_mapping:
-        lang_code = language_mapping[voice]
-    else:
-        lang_code = voice
+    # Get the correct language code for AssemblyAI
+    lang_code = language_mapping.get(voice, 'en')  # Default to English
 
     aai.settings.api_key = ASSEMBLY_AI_API_KEY
     config = aai.TranscriptionConfig(language_code=lang_code)
@@ -119,8 +129,9 @@ def generate_subtitles(audio_path: str, sentences: List[str], audio_clips: List[
         # Equalize subtitles
         srt_equalizer.equalize_srt_file(srt_path, srt_path, max_chars)
 
-    # Save subtitles
-    subtitles_path = f"../subtitles/{uuid.uuid4()}.srt"
+    # Save subtitles in temp directory
+    subtitles_path = f"temp/subtitles/{uuid.uuid4()}.srt"  # Changed from ../subtitles to temp/subtitles
+    os.makedirs(os.path.dirname(subtitles_path), exist_ok=True)
 
     if ASSEMBLY_AI_API_KEY is not None and ASSEMBLY_AI_API_KEY != "":
         print(colored("[+] Creating subtitles using AssemblyAI", "blue"))
@@ -128,11 +139,8 @@ def generate_subtitles(audio_path: str, sentences: List[str], audio_clips: List[
     else:
         print(colored("[+] Creating subtitles locally", "blue"))
         subtitles = __generate_subtitles_locally(sentences, audio_clips)
-        # print(colored("[-] Local subtitle generation has been disabled for the time being.", "red"))
-        # print(colored("[-] Exiting.", "red"))
-        # sys.exit(1)
 
-    with open(subtitles_path, "w") as file:
+    with open(subtitles_path, "w", encoding='utf-8') as file:
         file.write(subtitles)
 
     # Equalize subtitles
@@ -157,7 +165,7 @@ def combine_videos(video_paths: List[str], max_duration: int, max_clip_duration:
         str: The path to the combined video.
     """
     video_id = uuid.uuid4()
-    combined_video_path = f"../temp/{video_id}.mp4"
+    combined_video_path = f"temp/videos/{video_id}.mp4"
     
     # Required duration of each clip
     req_dur = max_duration / len(video_paths)
@@ -222,7 +230,7 @@ def generate_video(combined_video_path: str, tts_path: str, subtitles_path: str,
     # Make a generator that returns a TextClip when called with consecutive
     generator = lambda txt: TextClip(
         txt,
-        font="../fonts/bold_font.ttf",
+        font="fonts/bold_font.ttf",
         fontsize=100,
         color=text_color,
         stroke_color="black",
@@ -243,6 +251,6 @@ def generate_video(combined_video_path: str, tts_path: str, subtitles_path: str,
     audio = AudioFileClip(tts_path)
     result = result.set_audio(audio)
 
-    result.write_videofile("../temp/output.mp4", threads=threads or 2)
+    result.write_videofile("temp/output.mp4", threads=threads or 2)
 
     return "output.mp4"
