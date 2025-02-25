@@ -459,45 +459,58 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
                 if i == num_videos - 1:
                     this_segment_duration = total_duration - current_time
                 else:
-                    this_segment_duration = segment_duration
+                    this_segment_duration = segment_duration + 0.5  # Add overlap for transition
                 
                 print(colored(f"Video duration: {clip.duration:.2f}s", "cyan"))
                 print(colored(f"Segment duration: {this_segment_duration:.2f}s", "cyan"))
                 
                 # Select portion of video
                 if clip.duration > this_segment_duration:
-                    # If video is longer than needed, take a random section
                     max_start = clip.duration - this_segment_duration
                     start_time = random.uniform(0, max_start)
                     clip = clip.subclip(start_time, start_time + this_segment_duration)
                     print(colored(f"Using section {start_time:.2f}s to {start_time + this_segment_duration:.2f}s", "cyan"))
                 else:
-                    # If video is shorter, loop it
                     clip = clip.loop(duration=this_segment_duration)
                     print(colored("Looping video to match duration", "yellow"))
                 
                 # Resize to vertical format
                 clip = resize_to_vertical(clip)
                 
-                # Add transitions
+                # Add smooth transitions
                 if i > 0:
-                    clip = clip.crossfadein(0.3)
+                    # Fade in while previous clip is still playing
+                    clip = clip.set_start(current_time - 0.5)  # Start 0.5s before current time
+                    clip = clip.crossfadein(0.5)  # Longer, smoother crossfade
+                
                 if i < num_videos - 1:
-                    clip = clip.crossfadeout(0.3)
+                    clip = clip.crossfadeout(0.5)  # Longer fadeout to match fadein
                 
                 background_clips.append(clip)
-                current_time += this_segment_duration
+                current_time += segment_duration  # Use original segment duration for timing
                 
             except Exception as e:
                 print(colored(f"Error processing video {i+1}: {str(e)}", "red"))
-                # Create fallback black clip
-                clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
-                background_clips.append(clip)
-                current_time += this_segment_duration
+                # Instead of black clip, duplicate previous clip or use next clip
+                if background_clips:
+                    fallback_clip = background_clips[-1].copy()
+                elif i < len(paths) - 1:
+                    # Try to use next clip if this is not the last one
+                    try:
+                        fallback_clip = VideoFileClip(str(paths[i+1]))
+                    except:
+                        fallback_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
+                else:
+                    fallback_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
+                
+                fallback_clip = fallback_clip.set_duration(this_segment_duration)
+                background_clips.append(fallback_clip)
+                current_time += segment_duration
 
-        # Combine all clips
+        # Combine all clips with composite method
         print(colored("\nCombining video segments...", "blue"))
-        final_background = concatenate_videoclips(background_clips, method="compose")
+        final_background = CompositeVideoClip(background_clips)
+        final_background = final_background.set_duration(total_duration)
         print(colored(f"Final duration: {final_background.duration:.2f}s", "cyan"))
         
         # Create final video with audio

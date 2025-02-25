@@ -599,9 +599,21 @@ class VideoGenerator:
     async def _get_video_suggestions(self, script):
         """Get video suggestions from GPT based on script content"""
         try:
+            # Estimate duration based on word count (assuming ~3 words per second)
+            word_count = len(script.split())
+            estimated_duration = word_count / 3  # Roughly 3 words per second
+
+            # Determine number of video suggestions based on duration
+            if estimated_duration <= 15:  # Short videos (~15 sec)
+                num_suggestions = 3
+            elif estimated_duration <= 60:  # Medium-length videos (~30-60 sec)
+                num_suggestions = 4
+            else:  # Long videos (60+ sec)
+                num_suggestions = 6
+
             prompt = f"""
-            Analyze this script and suggest 4-6 specific video scenes that would match the content well.
-            Focus on visual elements that would enhance the story.
+            Analyze this script and suggest {num_suggestions} specific video scenes that would match the content well.
+            Focus on visual elements that enhance the story.
             Format each suggestion as a clear search term for stock videos.
 
             Script:
@@ -616,7 +628,7 @@ class VideoGenerator:
             1. programmer drinking coffee - Shows the main subject of the story
             2. coding workspace setup - Establishes the environment
             3. typing on keyboard closeup - Shows the action
-            4. coffee cup steam programming - Creates atmosphere
+            4. coffee cup steam programming - Creates atmosphere (only if longer script)
             """
 
             # Use your existing GPT integration
