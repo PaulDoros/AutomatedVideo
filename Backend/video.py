@@ -12,6 +12,11 @@ import numpy as np
 from urllib.parse import quote
 import random
 from pathlib import Path
+from moviepy.config import change_settings
+
+# Configure MoviePy to use ImageMagick
+if os.getenv('IMAGEMAGICK_BINARY'):
+    change_settings({"IMAGEMAGICK_BINARY": os.getenv('IMAGEMAGICK_BINARY')})
 
 def save_video(video_url: str, directory: str) -> str:
     """Saves a video from URL to specified directory"""
@@ -258,6 +263,67 @@ def resize_to_vertical(clip):
         print(colored(f"Error in resize_to_vertical: {str(e)}", "red"))
         return None
 
+def create_subtitle_bg(txt):
+    """Create clean, reliable subtitles with ImageMagick"""
+    try:
+        # Clean and wrap text
+        txt = txt.strip()
+        
+        # Create text clip with ImageMagick
+        txt_clip = TextClip(
+            txt=txt,
+            font='Arial-Bold',
+            fontsize=70,
+            color='white',
+            stroke_color='black',
+            stroke_width=2,
+            method='caption',  # Use caption method for better rendering
+            size=(900, None),
+            align='center',
+            kerning=2
+        )
+        
+        # Create background with proper padding
+        pad_x = 40
+        pad_y = 30
+        bg_width = txt_clip.w + pad_x
+        bg_height = txt_clip.h + pad_y
+        
+        # Create solid background
+        bg_clip = ColorClip(
+            size=(bg_width, bg_height),
+            color=(0, 0, 0)
+        ).set_opacity(0.7)
+        
+        # Center text on background
+        txt_clip = txt_clip.set_position(('center', 'center'))
+        
+        # Combine with crossfade
+        composite = CompositeVideoClip(
+            [bg_clip, txt_clip],
+            size=(bg_width, bg_height)
+        )
+        
+        # Add fade effects
+        final_clip = (composite
+            .set_duration(2)
+            .fadein(0.25)
+            .fadeout(0.25))
+        
+        return final_clip
+        
+    except Exception as e:
+        print(colored(f"Subtitle creation error: {str(e)}", "red"))
+        # Simple fallback
+        return TextClip(
+            txt=txt,
+            font='Arial-Bold',
+            fontsize=70,
+            color='white',
+            method='caption',
+            size=(900, None)
+        ).set_duration(2)
+
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None):
     """Generate final video with audio and optional subtitles"""
     try:
@@ -398,75 +464,14 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
                 return '\n'.join(lines)
             
             # Create background for subtitles
-            def create_subtitle_bg(txt):
-                """Create clean, simple subtitles with good readability"""
-                try:
-                    # Clean and wrap text
-                    txt = txt.strip()
-                    
-                    # Create text clip with clean styling
-                    txt_clip = TextClip(
-                        txt=txt,
-                        font='Arial-Bold',
-                        fontsize=70,
-                        color='white',
-                        stroke_color='black',
-                        stroke_width=2,
-                        method='label',
-                        size=(900, None),  # Limit width, auto-height
-                        align='center'
-                    )
-                    
-                    # Simple semi-transparent background
-                    bg_width = txt_clip.w + 40   # 20px padding each side
-                    bg_height = txt_clip.h + 30  # 15px padding top and bottom
-                    
-                    bg_clip = ColorClip(
-                        size=(bg_width, bg_height),
-                        color=(0, 0, 0)
-                    ).set_opacity(0.6)
-                    
-                    # Center text on background
-                    txt_clip = txt_clip.set_position(('center', 'center'))
-                    
-                    # Combine text and background
-                    composite = CompositeVideoClip(
-                        [bg_clip, txt_clip],
-                        size=(bg_width, bg_height)
-                    ).set_duration(2)
-                    
-                    return composite
-                    
-                except Exception as e:
-                    print(colored(f"Subtitle creation error: {str(e)}", "red"))
-                    # Ultra simple fallback
-                    return TextClip(
-                        txt=txt,
-                        font='Arial-Bold',
-                        fontsize=70,
-                        color='white',
-                        stroke_color='black',
-                        stroke_width=2,
-                        method='label'
-                    ).set_duration(2)
-
-            # Create subtitles with background
-            try:
-                subtitles = SubtitlesClip(subtitles_path, create_subtitle_bg)
-                subtitles = subtitles.set_position(style['position'])
-                
-                # Add fade effects
-                subtitles = subtitles.crossfadein(0.3).crossfadeout(0.3)
-                
-                # Composite with video using explicit size
-                video = CompositeVideoClip(
-                    [video, subtitles],
-                    size=(1080, 1920)  # Ensure final size is explicit
-                )
-            except Exception as e:
-                print(colored(f"Warning: Failed to add subtitles: {str(e)}", "yellow"))
-                # Continue without subtitles if they fail
-                pass
+            subtitles = SubtitlesClip(subtitles_path, create_subtitle_bg)
+            subtitles = subtitles.set_position(style['position'])
+            
+            # Composite with video using explicit size
+            video = CompositeVideoClip(
+                [video, subtitles],
+                size=(1080, 1920)  # Ensure final size is explicit
+            )
 
         # Write final video
         output_path = "temp/final_video.mp4"
