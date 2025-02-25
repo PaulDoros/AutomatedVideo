@@ -32,62 +32,55 @@ class ContentValidator:
     def validate_script(self, script, channel_type):
         """Validate script content and structure"""
         try:
-            # First clean up the script - handle line breaks properly
+            # Clean up the script
             lines = []
             for line in script.split('\n'):
                 line = line.strip()
-                if line and not line.startswith('['):  # Skip scene directions
-                    # Keep emojis with their lines
-                    if not any(line.startswith(c) for c in ['🏆', '☕️', '💻', '🚀', '✨']):
-                        lines.append(line)
-                    else:
-                        if lines:
-                            lines[-1] = lines[-1] + ' ' + line
-                        else:
-                            lines.append(line)
+                if line and not line.startswith('['):
+                    lines.append(line)
 
             # Calculate metrics
             total_words = sum(len(re.findall(r'\w+', line)) for line in lines)
             estimated_duration = total_words * 0.4  # 0.4 seconds per word
 
+            # Strict length validation
+            if total_words > 100:  # Hard limit on words
+                return False, {"message": f"Script too long ({total_words} words). Maximum is 100 words."}
+            
+            if estimated_duration > 45:  # Hard limit on duration
+                return False, {"message": f"Script too long ({estimated_duration:.1f}s). Maximum is 45 seconds."}
+            
+            if len(lines) > 8:  # Hard limit on lines
+                return False, {"message": f"Too many lines ({len(lines)}). Maximum is 8 lines."}
+
             # Print analysis
             print(colored("\nScript Analysis:", "blue"))
-            print(colored(f"Lines: {len(lines)}", "cyan"))
-            print(colored(f"Words: {total_words}", "cyan"))
-            print(colored(f"Estimated Duration: {estimated_duration:.1f}s", "cyan"))
+            print(colored(f"Lines: {len(lines)}/{8} max", "cyan"))
+            print(colored(f"Words: {total_words}/100 max", "cyan"))
+            print(colored(f"Estimated Duration: {estimated_duration:.1f}/45s max", "cyan"))
             
             # Print the processed script
             print(colored("\nProcessed Script:", "blue"))
             for i, line in enumerate(lines, 1):
                 print(colored(f"{i}. {line}", "cyan"))
 
-            # More flexible validation
-            if estimated_duration > 120:  # Allow up to 2 minutes but warn
-                print(colored(f"\nWarning: Script duration ({estimated_duration:.1f}s) is longer than ideal for shorts", "yellow"))
-            
-            # Check for minimum content and emojis
+            # Check for minimum content
             if total_words < 30:
                 return False, {"message": "Script too short, need at least 30 words"}
 
-            emoji_count = sum(1 for line in lines if any(emoji in line for emoji in 
-                ['☕️', '💻', '🚀', '✨', '🔥', '🎯', '💡', '🤖', '👨‍💻', '👩‍💻', '🎉', '🌟']))
-            if emoji_count < 2:
-                return False, {"message": "Script must include at least 2 emojis"}
-
             # Save successful scripts for learning
-            if 25 <= estimated_duration <= 65:  # This is our ideal range
+            if 25 <= estimated_duration <= 45:  # This is our ideal range
                 self._save_successful_script(channel_type, script, {
                     "duration": estimated_duration,
                     "words": total_words,
-                    "lines": len(lines),
-                    "emoji_count": emoji_count
+                    "lines": len(lines)
                 })
 
             return True, {
                 "lines": len(lines),
                 "words": total_words,
                 "estimated_duration": estimated_duration,
-                "is_ideal_length": 25 <= estimated_duration <= 65
+                "is_ideal_length": 25 <= estimated_duration <= 45
             }
 
         except Exception as e:
@@ -435,41 +428,212 @@ Style Guidelines:
         return enhanced_prompt
 
     def get_channel_prompt(self, channel_type, topic):
-        """Get channel-specific prompt template with examples from successful scripts"""
-        base_prompt = """
-            Create an engaging script about {topic} for short-form video.
-
-            GUIDELINES (not strict rules):
-            - Aim for 50-100 words total
-            - Use 7-10 clear points/lines
-            - Add relevant emojis to enhance key points
-            - Focus on engagement over exact timing
-            - Keep each point clear and impactful
-
-            Structure:
-            1. Hook question/statement
-            2. Quick engaging answer
-            3-6. Main points with humor/value
-            7. Surprising twist or revelation
-            8. Clear call to action
-
-            Example Format:
-            Ever wondered why programmers debug with rubber ducks? 🦆
-            These squeaky friends are our secret debugging tool! 💻
-            Explaining code to ducks makes bugs magically appear! ✨
-            Ducks never judge your messy code or variable names! 🤫
-            They're the only ones who understand our loops! 🔄
-            Plot twist: The ducks are actually coding experts! ��
-            Follow for more dev secrets and duck debugging! 🚀
+        """Get channel-specific prompt template"""
+        base_length_guide = """
+        CRITICAL LENGTH REQUIREMENTS:
+        - Target length: 20-30 seconds
+        - Maximum word count: 50-60 words
+        - Aim for 4-5 lines total
+        - Each line: 10-15 words maximum
+        
+        Your script MUST fit these requirements for short-form video.
         """
+        
+        prompts = {
+            'tech_humor': f"""
+            {base_length_guide}
+            
+            Create a SINGLE, FOCUSED tech joke/story about {topic} for short-form video.
+            Focus on ONE punchline and build up to it perfectly!
+            Remember: ONE JOKE, make it count!
 
-        # Add successful examples if available
-        successful_scripts = self._load_successful_scripts(channel_type)
-        if successful_scripts:
-            best_script = successful_scripts[-1]['script']
-            base_prompt += f"\n\nHere's another successful example:\n{best_script}"
+            Style Guide:
+            - Start with a relatable tech situation
+            - Build tension with one clear setup
+            - Deliver one strong punchline
+            - Keep energy high and delivery snappy
+            
+            Structure (4-5 lines ONLY):
+            1. Hook: Relatable tech situation (10-12 words)
+            2. Setup: Build the context (10-15 words)
+            3. Tension: Add detail or twist (10-15 words)
+            4. Punchline: The big payoff (8-12 words)
+            5. Quick call to action (5-8 words)
+            
+            Example Perfect Length:
+            "Ever wonder why programmers can't fix printers? 🖨️
+            They keep saying 'It works on my machine!' 💻
+            But when they try to print their code...
+            All they get is 404: Paper not found! 😅
+            Follow for more tech fails! 🚀"
+            
+            Focus on ONE strong joke - no multiple punchlines!
+            Make it punchy, clear, and KEEP IT SHORT!
+            """,
 
-        return base_prompt.format(topic=topic)
+            'ai_money': """
+            Create an INSIGHTFUL and ACTIONABLE script about {topic} for short-form video.
+            Focus on real AI opportunities and practical implementation.
+
+            Style Guide:
+            - Professional but accessible tone
+            - Data-driven insights
+            - Clear step-by-step explanations
+            - Realistic expectations
+            - Specific numbers and examples
+            - Engaging storytelling
+            
+            Content Elements:
+            - Current AI trend or opportunity
+            - Market gap or pain point
+            - Practical implementation steps
+            - Real earning potential
+            - Risk considerations
+            - Resource requirements
+            
+            Structure:
+            1. Hook: Attention-grabbing AI stat/fact
+            2. Problem: Market gap or opportunity
+            3. Solution: AI-based approach
+            4. Implementation: Step-by-step guide
+            5. Results: Expected outcomes
+            6. Validation: Proof or case study
+            7. Action steps: How to start
+            8. Engaging call to action
+            
+            Key Topics to Cover:
+            - AI tools and platforms
+            - Market research
+            - Implementation strategy
+            - Cost analysis
+            - Revenue streams
+            - Scaling potential
+            - Common pitfalls
+            - Success metrics
+            """,
+
+            'baby_tips': """
+            Create a WARM and SUPPORTIVE script about {topic} for short-form video.
+            Focus on practical, evidence-based parenting advice.
+
+            Style Guide:
+            - Nurturing and encouraging tone
+            - Clear, actionable advice
+            - Evidence-based information
+            - Empathetic understanding
+            - Realistic expectations
+            - Safety-first approach
+            
+            Content Elements:
+            - Common parenting challenge
+            - Expert-backed solution
+            - Step-by-step guidance
+            - Safety considerations
+            - Age-appropriate variations
+            - Real parent experiences
+            
+            Structure:
+            1. Hook: Relatable parenting moment
+            2. Challenge: Common situation
+            3. Solution: Expert advice
+            4. Implementation: How-to steps
+            5. Variations: Age adaptations
+            6. Safety notes: Important considerations
+            7. Success indicators: What to expect
+            8. Supportive call to action
+            
+            Key Areas to Address:
+            - Child development stages
+            - Safety considerations
+            - Expert recommendations
+            - Common concerns
+            - Practical tips
+            - Parent self-care
+            - Support resources
+            """,
+
+            'quick_meals': """
+            Create an ENERGETIC and PRACTICAL script about {topic} for short-form video.
+            Focus on delicious, time-saving meal solutions.
+
+            Style Guide:
+            - Enthusiastic and encouraging tone
+            - Clear, concise instructions
+            - Time-saving tips
+            - Practical ingredient choices
+            - Visual appeal focus
+            - Engaging food descriptions
+            
+            Content Elements:
+            - Quick recipe overview
+            - Time-saving techniques
+            - Ingredient substitutions
+            - Kitchen hacks
+            - Plating tips
+            - Nutrition highlights
+            
+            Structure:
+            1. Hook: Mouth-watering intro
+            2. Recipe overview: Time/difficulty
+            3. Ingredients: Simple list
+            4. Quick steps: Clear process
+            5. Pro tips: Time savers
+            6. Variations: Easy swaps
+            7. Final presentation
+            8. Tasty call to action
+            
+            Key Features:
+            - Prep time under 30 mins
+            - Common ingredients
+            - Tool substitutions
+            - Storage tips
+            - Batch cooking options
+            - Nutritional benefits
+            - Flavor enhancers
+            """,
+
+            'fitness_motivation': """
+            Create an INSPIRING and ENERGIZING script about {topic} for short-form video.
+            Focus on achievable fitness goals and motivation.
+
+            Style Guide:
+            - High-energy, motivational tone
+            - Clear exercise instruction
+            - Form-focused guidance
+            - Inclusive language
+            - Progress-oriented
+            - Safety-conscious
+            
+            Content Elements:
+            - Motivational hook
+            - Exercise demonstration
+            - Form guidance
+            - Modification options
+            - Progress tracking
+            - Mental benefits
+            
+            Structure:
+            1. Hook: Motivational opener
+            2. Challenge: Fitness goal
+            3. Technique: Proper form
+            4. Progression: Level options
+            5. Tips: Success secrets
+            6. Benefits: Results preview
+            7. Motivation: Inspiration
+            8. Energetic call to action
+            
+            Key Components:
+            - Form cues
+            - Safety checks
+            - Modification levels
+            - Progress metrics
+            - Recovery tips
+            - Mental strategies
+            - Success habits
+            """
+        }
+        
+        return prompts.get(channel_type, "").format(topic=topic)
 
     def _load_successful_scripts(self, channel_type: str) -> list:
         """Load previously successful scripts"""
@@ -481,4 +645,17 @@ Style Guidelines:
             return []
         except Exception as e:
             print(colored(f"Error loading successful scripts: {str(e)}", "yellow"))
-            return [] 
+            return []
+
+    async def generate_with_gpt(self, prompt):
+        """Generate content using GPT"""
+        try:
+            # Use the existing GPT integration
+            from gpt import generate_gpt_response
+            
+            response = await generate_gpt_response(prompt)
+            return response
+            
+        except Exception as e:
+            print(colored(f"Error generating GPT response: {str(e)}", "red"))
+            return None 

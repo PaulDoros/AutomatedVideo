@@ -4,7 +4,7 @@ from tiktok_upload import TikTokUploader
 import os
 from termcolor import colored
 from content_validator import ContentValidator, ScriptGenerator
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips
+from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips, AudioClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 from tiktokvoice import tts
 from video import generate_video, generate_subtitles, combine_videos, save_video
@@ -24,6 +24,8 @@ from search import search_for_stock_videos  # Add this import
 from dotenv import load_dotenv
 import uuid
 import re
+from pydub import AudioSegment
+import openai
 
 # Third-party imports
 try:
@@ -43,6 +45,70 @@ try:
 except ImportError:
     print("Please install SciPy: pip install scipy")
     wavfile = None
+
+class AudioManager:
+    def __init__(self):
+        self.voices = {
+            'tech_humor': {
+                'voices': {
+                    'nova': {'weight': 3, 'description': 'Energetic female, perfect for tech humor'},
+                    'echo': {'weight': 3, 'description': 'Dynamic male, great for casual tech content'}
+                },
+                'style': 'humorous'
+            },
+            'ai_money': {
+                'voices': {
+                    'onyx': {'weight': 3, 'description': 'Professional male voice'},
+                    'shimmer': {'weight': 2, 'description': 'Clear female voice'}
+                },
+                'style': 'professional'
+            },
+            'default': {
+                'voices': {
+                    'echo': {'weight': 2, 'description': 'Balanced male voice'},
+                    'nova': {'weight': 2, 'description': 'Engaging female voice'}
+                },
+                'style': 'casual'
+            }
+        }
+        
+        self.voiceovers_dir = "temp/tts"
+        os.makedirs(self.voiceovers_dir, exist_ok=True)
+
+    def select_voice(self, channel_type):
+        """Select appropriate voice based on content type"""
+        channel_config = self.voices.get(channel_type, self.voices['default'])
+        voices = channel_config['voices']
+        
+        # Weight-based selection
+        total_weight = sum(v['weight'] for v in voices.values())
+        r = random.uniform(0, total_weight)
+        
+        current_weight = 0
+        for voice, config in voices.items():
+            current_weight += config['weight']
+            if r <= current_weight:
+                return voice, channel_config['style']
+        
+        return list(voices.keys())[0], channel_config['style']
+
+    def enhance_audio(self, audio_segment):
+        """Enhance audio quality"""
+        try:
+            # Normalize volume
+            audio = audio_segment.normalize()
+            
+            # Apply subtle compression
+            audio = audio.compress_dynamic_range()
+            
+            # Adjust speed if needed
+            # audio = audio._spawn(audio.raw_data, overrides={'frame_rate': int(audio.frame_rate * speed)})
+            
+            return audio
+            
+        except Exception as e:
+            print(colored(f"Error enhancing audio: {str(e)}", "red"))
+            return audio_segment
 
 async def generate_tts(text, voice, output_path):
     """Generate TTS using TikTok voice"""
@@ -125,6 +191,23 @@ class VideoGenerator:
         # Set speaker for multi-speaker model
         if hasattr(self.tts, 'speakers') and len(self.tts.speakers) > 0:
             self.tts.speaker = "p273"  # Male voice with good clarity
+
+        # Define available voices for variety
+        self.voice_options = {
+            'male_professional': ['p226', 'p227', 'p232'],
+            'male_casual': ['p273', 'p274', 'p276'],
+            'female_professional': ['p238', 'p243', 'p244'],
+            'female_casual': ['p248', 'p251', 'p294'],
+        }
+        
+        # Map channels to voice types
+        self.channel_voices = {
+            'tech_humor': ['male_casual', 'female_casual'],
+            'ai_money': ['male_professional', 'female_professional'],
+            'baby_tips': ['female_casual', 'female_professional'],
+            'quick_meals': ['female_casual', 'male_casual'],
+            'fitness_motivation': ['male_professional', 'male_casual']
+        }
 
     def _create_directories(self):
         """Create all necessary directories"""
@@ -250,7 +333,8 @@ class VideoGenerator:
             if not subtitles_path:
                 raise ValueError("Failed to generate subtitles")
             
-            background_paths = await self._process_background_videos(channel_type)
+            # Get background videos using script content
+            background_paths = await self._process_background_videos(channel_type, script)
             if not background_paths:
                 raise ValueError("Failed to get background videos")
             
@@ -282,70 +366,91 @@ class VideoGenerator:
             return False
 
     async def _generate_tts(self, script, channel_type):
-        """Generate TTS using Coqui"""
+        """Generate TTS using OpenAI's enhanced voices with cost optimization"""
         try:
-            tts_path = f"temp/tts/{channel_type}_latest.mp3"
-            os.makedirs(os.path.dirname(tts_path), exist_ok=True)
+            audio_manager = AudioManager()
+            voice, style = audio_manager.select_voice(channel_type)
             
+            print(colored(f"Using OpenAI voice: {voice} (style: {style})", "blue"))
+            
+            # Process script with better sentence splitting
             sentences = []
             for line in script.split('\n'):
-                clean_line = re.sub(r'[^\x00-\x7F]+', '', line).strip()
-                if clean_line:
-                    sentences.append(clean_line)
+                # Clean and split into natural phrases
+                phrases = re.split(r'([.!?]+)', line.strip())
+                for i in range(0, len(phrases)-1, 2):
+                    phrase = (phrases[i] + phrases[i+1]).strip()
+                    if phrase:
+                        sentences.append(phrase)
             
             audio_clips = []
             timings = []
             current_time = 0
             
+            # Use TTS HD for better quality at reasonable cost
+            client = openai.OpenAI()
+            
             for sentence in sentences:
-                temp_path = f"temp/tts/temp_{uuid.uuid4()}.wav"
                 try:
-                    # Generate audio
-                    if hasattr(self.tts, 'speakers') and len(self.tts.speakers) > 0:
-                        self.tts.tts_to_file(text=sentence, file_path=temp_path, speaker=self.tts.speaker)
-                    else:
-                        self.tts.tts_to_file(text=sentence, file_path=temp_path)
+                    temp_path = f"temp/tts/temp_{uuid.uuid4()}.mp3"
                     
-                    # Wait a bit to ensure file is released
-                    await asyncio.sleep(0.1)
+                    # Generate TTS with OpenAI
+                    response = client.audio.speech.create(
+                        model="tts-1-hd",  # Use HD model for better quality
+                        voice=voice,
+                        input=sentence,
+                        speed=1.1 if style == 'humorous' else 1.0
+                    )
                     
-                    # Load audio only after ensuring file is written
-                    if os.path.exists(temp_path):
-                        audio_clip = AudioFileClip(temp_path)
-                        audio_clips.append(audio_clip)
-                        
-                        duration = audio_clip.duration
-                        timings.append({
-                            'text': sentence,
-                            'start': current_time,
-                            'end': current_time + duration
-                        })
-                        current_time += duration
+                    # Save and process audio
+                    with open(temp_path, "wb") as f:
+                        response.stream_to_file(temp_path)
+                    
+                    # Load and enhance audio
+                    audio = AudioSegment.from_mp3(temp_path)
+                    enhanced_audio = audio_manager.enhance_audio(audio)
+                    
+                    # Add natural pauses
+                    pause_duration = 200  # Base pause
+                    if sentence.endswith('?'):
+                        pause_duration = 300
+                    elif sentence.endswith('!'):
+                        pause_duration = 250
+                    
+                    silence = AudioSegment.silent(duration=pause_duration)
+                    final_audio = enhanced_audio + silence
+                    
+                    # Save enhanced audio
+                    final_path = f"temp/tts/enhanced_{uuid.uuid4()}.mp3"
+                    final_audio.export(final_path, format="mp3", bitrate="192k")
+                    
+                    # Create MoviePy audio clip
+                    audio_clip = AudioFileClip(final_path)
+                    audio_clips.append(audio_clip)
+                    
+                    # Store timing information
+                    duration = len(final_audio) / 1000.0
+                    timings.append({
+                        'text': sentence,
+                        'start': current_time,
+                        'end': current_time + duration
+                    })
+                    current_time += duration
+                    
+                    # Clean up temp files
+                    os.remove(temp_path)
+                    
                 except Exception as e:
                     print(colored(f"Warning: Failed to process sentence: {e}", "yellow"))
-                finally:
-                    # Clean up temp file with retry
-                    for _ in range(3):
-                        try:
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
-                            break
-                        except:
-                            await asyncio.sleep(0.1)
+                    continue
             
-            if not audio_clips:
-                raise ValueError("No audio clips were generated")
-            
-            # Combine all audio clips
+            # Combine all clips
+            final_path = f"temp/tts/{channel_type}_latest.mp3"
             final_audio = concatenate_audioclips(audio_clips)
-            final_audio.write_audiofile(tts_path, fps=44100)
-            
-            # Clean up
-            for clip in audio_clips:
-                clip.close()
+            final_audio.write_audiofile(final_path, fps=44100, bitrate="192k")
             
             self.sentence_timings = timings
-            return tts_path
+            return final_path
             
         except Exception as e:
             print(colored(f"TTS generation failed: {str(e)}", "red"))
@@ -385,71 +490,295 @@ class VideoGenerator:
         seconds = int(seconds)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
-    async def _process_background_videos(self, channel_type):
-        """Process background videos for the channel"""
+    def _analyze_script_content(self, script):
+        """Analyze script to understand main topics and context"""
         try:
-            # First check for local background videos
+            # Common words to filter out
+            stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'is', 'are', 'was', 'were', 'that', 'this', 'these', 'those'}
+            
+            # Clean and split script
+            script_lower = script.lower()
+            sentences = script_lower.split('.')
+            
+            # Extract main topics and context
+            topics = {
+                'main_subject': [],    # Primary topic (e.g., 'coffee', 'debugging')
+                'actions': [],         # What's happening (e.g., 'drinking', 'coding')
+                'environment': [],     # Where it happens (e.g., 'office', 'desk')
+                'objects': [],         # Related objects (e.g., 'keyboard', 'monitor')
+                'mood': []            # Emotional context (e.g., 'funny', 'serious')
+            }
+            
+            # Mood indicators
+            mood_words = {
+                'funny': ['joke', 'humor', 'funny', 'laugh', 'twist', 'pun'],
+                'serious': ['important', 'serious', 'critical', 'essential'],
+                'educational': ['learn', 'understand', 'explain', 'tutorial'],
+                'motivational': ['inspire', 'motivation', 'achieve', 'success']
+            }
+            
+            # Process each sentence
+            for sentence in sentences:
+                words = sentence.replace('!', '').replace('?', '').replace(',', '').split()
+                words = [w for w in words if w not in stop_words and len(w) > 3]
+                
+                # Look for word pairs that might indicate topics
+                for i in range(len(words)-1):
+                    pair = f"{words[i]} {words[i+1]}"
+                    
+                    # Check if pair indicates a topic
+                    if any(term in pair for term in ['coding', 'programming', 'developer', 'software']):
+                        topics['main_subject'].append(pair)
+                    elif any(term in pair for term in ['drinking', 'working', 'typing']):
+                        topics['actions'].append(pair)
+                    elif any(term in pair for term in ['office', 'desk', 'workspace']):
+                        topics['environment'].append(pair)
+                
+                # Check individual words
+                for word in words:
+                    # Check for objects
+                    if any(term in word for term in ['keyboard', 'screen', 'monitor', 'coffee', 'computer']):
+                        topics['objects'].append(word)
+                    
+                    # Check for mood
+                    for mood, indicators in mood_words.items():
+                        if any(indicator in word for indicator in indicators):
+                            topics['mood'].append(mood)
+
+            # Clean up and deduplicate
+            for category in topics:
+                topics[category] = list(set(topics[category]))
+
+            print(colored(f"Script analysis: {topics}", "blue"))
+            return topics
+
+        except Exception as e:
+            print(colored(f"Error analyzing script: {str(e)}", "red"))
+            return None
+
+    def _generate_search_terms(self, script_analysis):
+        """Generate search terms based on script analysis"""
+        try:
+            search_terms = []
+            
+            if not script_analysis:
+                return ['background video']
+            
+            # Combine main subject with actions
+            for subject in script_analysis['main_subject']:
+                for action in script_analysis['actions']:
+                    search_terms.append(f"{subject} {action}")
+            
+            # Combine main subject with environment
+            for subject in script_analysis['main_subject']:
+                for env in script_analysis['environment']:
+                    search_terms.append(f"{subject} {env}")
+            
+            # Add object-based searches
+            for obj in script_analysis['objects']:
+                search_terms.append(obj)
+                # Combine with environment if available
+                for env in script_analysis['environment']:
+                    search_terms.append(f"{obj} {env}")
+            
+            # Add mood-based context
+            if script_analysis['mood']:
+                mood = script_analysis['mood'][0]  # Use primary mood
+                for term in search_terms[:]:  # Search through copy of list
+                    search_terms.append(f"{mood} {term}")
+            
+            # Deduplicate and limit
+            search_terms = list(set(search_terms))
+            print(colored(f"Generated search terms: {search_terms[:10]}", "blue"))
+            return search_terms[:10]
+
+        except Exception as e:
+            print(colored(f"Error generating search terms: {str(e)}", "red"))
+            return ['background video']
+
+    async def _get_video_suggestions(self, script):
+        """Get video suggestions from GPT based on script content"""
+        try:
+            prompt = f"""
+            Analyze this script and suggest 4-6 specific video scenes that would match the content well.
+            Focus on visual elements that would enhance the story.
+            Format each suggestion as a clear search term for stock videos.
+
+            Script:
+            {script}
+
+            Provide suggestions in this format:
+            1. [search term] - [brief explanation why this fits]
+            2. [search term] - [brief explanation why this fits]
+            etc.
+
+            Example output:
+            1. programmer drinking coffee - Shows the main subject of the story
+            2. coding workspace setup - Establishes the environment
+            3. typing on keyboard closeup - Shows the action
+            4. coffee cup steam programming - Creates atmosphere
+            """
+
+            # Use your existing GPT integration
+            response = await self.script_generator.generate_with_gpt(prompt)
+            
+            # Parse the response to extract search terms
+            suggestions = []
+            for line in response.split('\n'):
+                if line.strip() and line[0].isdigit():
+                    # Extract the search term before the dash
+                    term = line.split('-')[0].strip()
+                    # Remove the number and dot from the beginning
+                    term = term.split('.', 1)[1].strip()
+                    suggestions.append({
+                        'term': term,
+                        'explanation': line.split('-')[1].strip() if '-' in line else ''
+                    })
+            
+            print(colored("Video suggestions from GPT:", "blue"))
+            for suggestion in suggestions:
+                print(colored(f"• {suggestion['term']} - {suggestion['explanation']}", "cyan"))
+            
+            return suggestions
+
+        except Exception as e:
+            print(colored(f"Error getting video suggestions: {str(e)}", "red"))
+            return None
+
+    async def _process_background_videos(self, channel_type, script=None):
+        """Process background videos with AI suggestions and content analysis"""
+        try:
+            # First check for local videos
             local_path = os.path.join("assets", "videos", channel_type)
             if os.path.exists(local_path):
                 videos = [f for f in os.listdir(local_path) if f.endswith(('.mp4', '.mov'))]
                 if videos:
-                    # Convert to absolute paths
                     video_paths = [os.path.abspath(os.path.join(local_path, v)) for v in videos]
                     print(colored(f"Using {len(video_paths)} local videos from {local_path}", "green"))
                     return video_paths
 
-            # Then try to get videos from Pexels
-            search_terms = {
-                'tech_humor': ['programming', 'coding', 'computer', 'technology'],
-                'ai_money': ['business', 'success', 'technology', 'future'],
-                'baby_tips': ['baby', 'parenting', 'family', 'children'],
-                'quick_meals': ['cooking', 'food', 'kitchen', 'recipe'],
-                'fitness_motivation': ['fitness', 'workout', 'exercise', 'gym']
-            }
+            # Get video suggestions from GPT
+            gpt_suggestions = await self._get_video_suggestions(script)
             
-            terms = search_terms.get(channel_type, ['background', 'abstract'])
+            # Also get our content analysis
+            script_analysis = self._analyze_script_content(script)
+            analysis_terms = self._generate_search_terms(script_analysis)
+            
+            # Combine and prioritize search terms
+            search_terms = []
+            
+            # First add GPT suggestions as they're more specific
+            if gpt_suggestions:
+                search_terms.extend([s['term'] for s in gpt_suggestions])
+            
+            # Then add our analyzed terms as backup
+            search_terms.extend(analysis_terms)
+            
+            # Deduplicate while preserving order
+            search_terms = list(dict.fromkeys(search_terms))
+            
             video_urls = []
+            max_videos = 8
             
-            # Create channel directory if it doesn't exist
+            # Allocate more videos for GPT suggestions
+            videos_per_term = 2 if len(search_terms) > 4 else 3
+            
+            # Create channel directory
             channel_dir = os.path.join("assets", "videos", channel_type)
             os.makedirs(channel_dir, exist_ok=True)
             
-            for term in terms:
-                try:
-                    urls = search_for_stock_videos(
-                        query=term,
-                        api_key=self.pexels_api_key,
-                        it=2,
-                        min_dur=3
-                    )
-                    if urls:
-                        for url in urls:
-                            # Save directly to channel directory
-                            saved_path = save_video(url, channel_dir)
-                            if saved_path:
-                                video_urls.append(saved_path)
-                    
-                    if len(video_urls) >= 4:
-                        break
-                    
-                except Exception as e:
-                    print(colored(f"Warning: Search failed for '{term}': {str(e)}", "yellow"))
-                    continue
+            # Search for each term
+            for term in search_terms:
+                if len(video_urls) >= max_videos:
+                    break
+                
+                print(colored(f"Searching for videos matching: {term}", "blue"))
+                urls = await self._search_and_save_videos(term, channel_dir, videos_per_term)
+                
+                if urls:
+                    video_urls.extend(urls)
+                    print(colored(f"Found {len(urls)} videos for '{term}'", "green"))
+                else:
+                    print(colored(f"No videos found for '{term}'", "yellow"))
             
             if video_urls:
-                return video_urls
+                # Randomize but ensure we have variety
+                grouped_videos = {}
+                for url in video_urls:
+                    term = next((t for t in search_terms if t.lower() in url.lower()), 'other')
+                    grouped_videos.setdefault(term, []).append(url)
+                
+                # Take videos from each group to ensure variety
+                final_videos = []
+                while len(final_videos) < max_videos and grouped_videos:
+                    for term in list(grouped_videos.keys()):
+                        if grouped_videos[term]:
+                            final_videos.append(grouped_videos[term].pop(0))
+                            if not grouped_videos[term]:
+                                del grouped_videos[term]
+                        if len(final_videos) >= max_videos:
+                            break
+                
+                return final_videos
             
-            # If no videos found, create and use a default background
+            return self._create_default_background()
+
+        except Exception as e:
+            print(colored(f"Background video processing failed: {str(e)}", "red"))
+            return None
+
+    async def _search_and_save_videos(self, term, directory, count):
+        """Helper function to search and save videos"""
+        try:
+            urls = search_for_stock_videos(
+                query=term,
+                api_key=self.pexels_api_key,
+                it=count,
+                min_dur=3
+            )
+            
+            saved_paths = []
+            for url in urls:
+                saved_path = save_video(url, directory)
+                if saved_path:
+                    saved_paths.append(saved_path)
+            
+            return saved_paths
+        except Exception as e:
+            print(colored(f"Search failed for '{term}': {str(e)}", "yellow"))
+            return []
+
+    def _create_default_background(self):
+        """Create a default black background video"""
+        try:
+            # Create default background path
             default_path = os.path.join("assets", "videos", "default_background.mp4")
-            if not os.path.exists(default_path):
-                os.makedirs(os.path.dirname(default_path), exist_ok=True)
-                from moviepy.editor import ColorClip
-                clip = ColorClip(size=(1920, 1080), color=(0, 0, 0), duration=60)
-                clip.write_videofile(default_path, fps=30)
+            os.makedirs(os.path.dirname(default_path), exist_ok=True)
+            
+            # Create a black background clip
+            clip = ColorClip(
+                size=(1080, 1920),  # Vertical format (9:16)
+                color=(0, 0, 0),
+                duration=60
+            )
+            
+            # Write the video file
+            clip.write_videofile(
+                default_path,
+                fps=30,
+                codec='libx264',
+                audio=False,
+                threads=4
+            )
+            
+            # Clean up
+            clip.close()
+            
+            print(colored("Created default background video", "yellow"))
             return [default_path]
             
         except Exception as e:
-            print(colored(f"Background video processing failed: {str(e)}", "red"))
+            print(colored(f"Error creating default background: {str(e)}", "red"))
             return None
 
     def create_section_clip(self, index, title, content, total_sections):

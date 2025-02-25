@@ -4,9 +4,7 @@ import g4f
 import json
 import openai
 import google.generativeai as genai
-
-from g4f.client import Client
-from termcolor import colored
+from openai import OpenAI
 from dotenv import load_dotenv
 from typing import Tuple, List
 
@@ -19,6 +17,27 @@ openai.api_key = OPENAI_API_KEY
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 genai.configure(api_key=GOOGLE_API_KEY)
 
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+async def generate_gpt_response(prompt: str) -> str:
+    """Generate response using GPT model"""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4-turbo-preview",  # Using latest GPT-4 model
+            messages=[
+                {"role": "system", "content": "You are a creative content writer specializing in short-form video scripts."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=150  # Limit response length for short-form content
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        print(f"Error in GPT response generation: {str(e)}")
+        return None
 
 def generate_response(prompt: str, ai_model: str) -> str:
     """
