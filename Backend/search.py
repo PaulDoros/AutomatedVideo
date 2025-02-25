@@ -6,61 +6,46 @@ from termcolor import colored
 def search_for_stock_videos(query: str, api_key: str, it: int, min_dur: int) -> List[str]:
     """
     Searches for stock videos based on a query.
-
-    Args:
-        query (str): The query to search for.
-        api_key (str): The API key to use.
-
-    Returns:
-        List[str]: A list of stock videos.
+    Now optimized to find fewer but more relevant videos.
     """
     
-    # Build headers
     headers = {
         "Authorization": api_key
     }
 
-    # Build URL
+    # Reduced number of results to process
     qurl = f"https://api.pexels.com/videos/search?query={query}&per_page={it}"
 
-    # Send the request
     r = requests.get(qurl, headers=headers)
-
-    # Parse the response
     response = r.json()
 
-    # Parse each video
     raw_urls = []
-    video_url = []
+    video_url = None
     video_res = 0
     try:
-        # loop through each video in the result
+        # Look for just one good quality video per query
         for i in range(it):
-            #check if video has desired minimum duration
-            if response["videos"][i]["duration"] < min_dur:
-                continue
-            raw_urls = response["videos"][i]["video_files"]
-            temp_video_url = ""
-            
-            # loop through each url to determine the best quality
-            for video in raw_urls:
-                # Check if video has a valid download link
-                if ".com/video-files" in video["link"]:
-                    # Only save the URL with the largest resolution
-                    if (video["width"]*video["height"]) > video_res:
-                        temp_video_url = video["link"]
-                        video_res = video["width"]*video["height"]
-                        
-            # add the url to the return list if it's not empty
-            if temp_video_url != "":
-                video_url.append(temp_video_url)
+            if response["videos"][i]["duration"] >= min_dur:
+                raw_urls = response["videos"][i]["video_files"]
                 
+                # Find the highest quality version
+                for video in raw_urls:
+                    if ".com/video-files" in video["link"]:
+                        if (video["width"]*video["height"]) > video_res:
+                            video_url = video["link"]
+                            video_res = video["width"]*video["height"]
+                
+                if video_url:
+                    break  # Stop once we find a good video
+
+        # Let user know
+        status = "found" if video_url else "no"
+        print(colored(f"\t=> \"{query}\" {status} matching video", "cyan"))
+
+        # Return single video URL or empty list
+        return [video_url] if video_url else []
+
     except Exception as e:
         print(colored("[-] No Videos found.", "red"))
         print(colored(e, "red"))
-
-    # Let user know
-    print(colored(f"\t=> \"{query}\" found {len(video_url)} Videos", "cyan"))
-
-    # Return the video url
-    return video_url
+        return []

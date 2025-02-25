@@ -923,4 +923,135 @@ def generate_video_for_channel(channel, topic, hashtags):
             
     except Exception as e:
         print(colored(f"[-] Error generating video for {channel}: {str(e)}", "red"))
-        return False 
+        return False
+
+def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
+    """
+    Combine videos by clipping segments from each video to match audio timing.
+    Each video will contribute a portion to the final video.
+    """
+    try:
+        clips = []
+        
+        # Get audio clip to analyze timing
+        audio_clip = AudioFileClip("temp/tts/tech_humor_latest.mp3")
+        total_duration = audio_clip.duration
+        
+        print(colored("\n=== Video Combination Debug Info ===", "blue"))
+        print(colored(f"Audio duration: {total_duration:.2f}s", "cyan"))
+        print(colored(f"Number of videos: {len(video_paths)}", "cyan"))
+        print(colored(f"Target duration: {target_duration:.2f}s", "cyan"))
+        
+        # Calculate segment duration for each video
+        num_videos = len(video_paths)
+        segment_duration = total_duration / num_videos
+        
+        print(colored("\n=== Segment Calculations ===", "blue"))
+        print(colored(f"Segment duration per video: {segment_duration:.2f}s", "cyan"))
+        
+        # Track our position in the timeline
+        current_time = 0
+        
+        for i, video_path in enumerate(video_paths):
+            try:
+                print(colored(f"\n=== Processing Video {i+1}/{num_videos} ===", "blue"))
+                print(colored(f"Video path: {video_path}", "cyan"))
+                
+                # Load video
+                video = VideoFileClip(video_path)
+                print(colored(f"Original video duration: {video.duration:.2f}s", "cyan"))
+                print(colored(f"Original video size: {video.size}", "cyan"))
+                
+                # Calculate this segment's duration
+                if i == num_videos - 1:
+                    this_segment_duration = total_duration - current_time
+                else:
+                    this_segment_duration = segment_duration
+                
+                print(colored(f"Target segment duration: {this_segment_duration:.2f}s", "cyan"))
+                
+                # Select portion of video to use
+                if video.duration > this_segment_duration:
+                    max_start = video.duration - this_segment_duration
+                    video_start = random.uniform(0, max_start)
+                    print(colored(f"Video longer than needed:", "yellow"))
+                    print(colored(f"- Max start time: {max_start:.2f}s", "yellow"))
+                    print(colored(f"- Selected start: {video_start:.2f}s", "yellow"))
+                    print(colored(f"- Will use: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s", "yellow"))
+                    
+                    # Create clip from portion of video
+                    clip = (video
+                           .subclip(video_start, video_start + this_segment_duration)
+                           .resize(width=1080)
+                           .set_position(("center", "center")))
+                else:
+                    print(colored(f"Video shorter than needed - will loop", "yellow"))
+                    print(colored(f"- Original duration: {video.duration:.2f}s", "yellow"))
+                    print(colored(f"- Need duration: {this_segment_duration:.2f}s", "yellow"))
+                    
+                    # Create looped clip
+                    clip = (video
+                           .loop(duration=this_segment_duration)
+                           .resize(width=1080)
+                           .set_position(("center", "center")))
+                
+                print(colored(f"Created clip duration: {clip.duration:.2f}s", "green"))
+                
+                # Add transition effects
+                if i > 0:
+                    print(colored("Adding entrance crossfade", "cyan"))
+                    clip = clip.crossfadein(0.3)
+                if i < num_videos - 1:
+                    print(colored("Adding exit crossfade", "cyan"))
+                    clip = clip.crossfadeout(0.3)
+                
+                clips.append(clip)
+                current_time += this_segment_duration
+                print(colored(f"Current total time: {current_time:.2f}s / {total_duration:.2f}s", "green"))
+                
+            except Exception as e:
+                print(colored(f"Error processing video {i+1}:", "red"))
+                print(colored(f"Error details: {str(e)}", "red"))
+                print(colored("Creating fallback black clip", "yellow"))
+                color_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
+                clips.append(color_clip)
+                current_time += this_segment_duration
+        
+        print(colored("\n=== Finalizing Video ===", "blue"))
+        print(colored(f"Number of clips to combine: {len(clips)}", "cyan"))
+        
+        # Combine all clips
+        final_clip = concatenate_videoclips(clips, method="compose")
+        print(colored(f"Final clip duration: {final_clip.duration:.2f}s", "cyan"))
+        
+        # Ensure exact duration match
+        if abs(final_clip.duration - total_duration) > 0.1:
+            print(colored(f"Duration mismatch of {abs(final_clip.duration - total_duration):.2f}s - adjusting...", "yellow"))
+            final_clip = final_clip.set_duration(total_duration)
+        
+        # Save combined video
+        output_path = "temp_combined.mp4"
+        print(colored(f"\nSaving to: {output_path}", "blue"))
+        
+        final_clip.write_videofile(
+            output_path,
+            threads=n_threads,
+            codec='libx264',
+            audio=False,
+            fps=30
+        )
+        
+        # Clean up
+        print(colored("\nCleaning up resources...", "blue"))
+        audio_clip.close()
+        for clip in clips:
+            clip.close()
+        final_clip.close()
+        
+        return output_path
+        
+    except Exception as e:
+        print(colored("\n=== Error in combine_videos ===", "red"))
+        print(colored(f"Error type: {type(e).__name__}", "red"))
+        print(colored(f"Error details: {str(e)}", "red"))
+        return None 

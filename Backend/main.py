@@ -2,6 +2,7 @@ import os
 from utils import *
 from dotenv import load_dotenv
 from tiktok_upload import TikTokUploader
+import random
 
 # Load environment variables
 load_dotenv("../.env")
@@ -118,72 +119,53 @@ def generate():
         # Generate a script
         script = generate_script(data["videoSubject"], paragraph_number, ai_model, voice, data["customPrompt"])  # Pass the AI model to the script generation
 
-        # Generate search terms
+        # Generate search terms - one per script sentence
+        sentences = script.split(". ")
         search_terms = get_search_terms(
-            data["videoSubject"], AMOUNT_OF_STOCK_VIDEOS, script, ai_model
+            data["videoSubject"], 
+            len(sentences),  # Get one term per sentence
+            script, 
+            ai_model
         )
 
-        # Search for a video of the given search term
+        # Search for videos - one per search term
         video_urls = []
+        min_dur = 5  # Reduced minimum duration since we'll clip them
 
-        # Defines how many results it should query and search through
-        it = 15
-
-        # Defines the minimum duration of each clip
-        min_dur = 10
-
-        # Loop through all search terms,
-        # and search for a video of the given search term
         for search_term in search_terms:
             if not GENERATING:
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Video generation was cancelled.",
-                        "data": [],
-                    }
-                )
-            found_urls = search_for_stock_videos(
-                search_term, os.getenv("PEXELS_API_KEY"), it, min_dur
-            )
-            # Check for duplicates
-            for url in found_urls:
-                if url not in video_urls:
-                    video_urls.append(url)
-                    break
-
-        # Check if video_urls is empty
-        if not video_urls:
-            print(colored("[-] No videos found to download.", "red"))
-            return jsonify(
-                {
+                return jsonify({
                     "status": "error",
-                    "message": "No videos found to download.",
+                    "message": "Video generation was cancelled.",
                     "data": [],
-                }
+                })
+            found_urls = search_for_stock_videos(
+                search_term, 
+                os.getenv("PEXELS_API_KEY"), 
+                10,  # Reduced number of results to check
+                min_dur
             )
-            
-        # Define video_paths
+            if found_urls:
+                video_urls.append(found_urls[0])  # Add the first (best) matching video
+
+        # Ensure we have enough videos
+        if len(video_urls) < len(sentences):
+            print(colored(f"[-] Not enough videos found. Need {len(sentences)}, got {len(video_urls)}", "yellow"))
+            # Fill missing videos with duplicates if needed
+            while len(video_urls) < len(sentences):
+                video_urls.append(random.choice(video_urls))
+
+        # Download videos
         video_paths = []
-
-        # Let user know
-        print(colored(f"[+] Downloading {len(video_urls)} videos...", "blue"))
-
-        # Save the videos
-        for video_url in video_urls:
-            if not GENERATING:
-                return jsonify(
-                    {
-                        "status": "error",
-                        "message": "Video generation was cancelled.",
-                        "data": [],
-                    }
-                )
+        for i, video_url in enumerate(video_urls):
             try:
                 saved_video_path = save_video(video_url)
-                video_paths.append(saved_video_path)
-            except Exception:
-                print(colored(f"[-] Could not download video: {video_url}", "red"))
+                video_paths.append({
+                    'path': saved_video_path,
+                    'sentence_index': i  # Track which sentence this video matches
+                })
+            except Exception as e:
+                print(colored(f"[-] Could not download video {i+1}: {str(e)}", "red"))
 
         # Let user know
         print(colored("[+] Videos downloaded!", "green"))
