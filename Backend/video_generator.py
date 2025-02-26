@@ -7,7 +7,7 @@ from content_validator import ContentValidator, ScriptGenerator
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips, AudioClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 from tiktokvoice import tts
-from video import generate_video, generate_subtitles, combine_videos, save_video
+from video import generate_video, generate_subtitles, combine_videos, save_video, generate_tts_audio
 from test_content_quality import ContentQualityChecker
 import json
 import time
@@ -366,115 +366,60 @@ class VideoGenerator:
             return False
 
     async def _generate_tts(self, script, channel_type):
-        """Generate TTS using OpenAI's enhanced voices with cost optimization"""
+        """Generate TTS using OpenAI's voice with a single API call"""
         try:
             audio_manager = AudioManager()
             voice, style = audio_manager.select_voice(channel_type)
             
             print(colored(f"Using OpenAI voice: {voice} (style: {style})", "blue"))
             
-            # Process script with better sentence splitting
-            sentences = []
-            for line in script.split('\n'):
-                # Clean and split into natural phrases
-                phrases = re.split(r'([.!?]+)', line.strip())
-                for i in range(0, len(phrases)-1, 2):
-                    phrase = (phrases[i] + phrases[i+1]).strip()
-                    if phrase:
-                        sentences.append(phrase)
+            # Clean up the script - remove line numbers and preserve emojis
+            clean_script = '\n'.join(
+                line.strip().strip('"') 
+                for line in script.split('\n') 
+                if line.strip() and not line[0].isdigit()
+            )
             
-            audio_clips = []
-            timings = []
-            current_time = 0
-            
-            # Use TTS HD for better quality at reasonable cost
+            # Make a single API call for the entire script
             client = openai.OpenAI()
+            response = client.audio.speech.create(
+                model="tts-1-hd",
+                voice=voice,
+                input=clean_script,
+                speed=1.1 if style == 'humorous' else 1.0,
+                response_format="mp3"
+            )
             
-            for sentence in sentences:
-                try:
-                    temp_path = f"temp/tts/temp_{uuid.uuid4()}.mp3"
-                    
-                    # Generate TTS with OpenAI
-                    response = client.audio.speech.create(
-                        model="tts-1-hd",  # Use HD model for better quality
-                        voice=voice,
-                        input=sentence,
-                        speed=1.1 if style == 'humorous' else 1.0
-                    )
-                    
-                    # Save and process audio
-                    with open(temp_path, "wb") as f:
-                        response.stream_to_file(temp_path)
-                    
-                    # Load and enhance audio
-                    audio = AudioSegment.from_mp3(temp_path)
-                    enhanced_audio = audio_manager.enhance_audio(audio)
-                    
-                    # Add natural pauses
-                    pause_duration = 200  # Base pause
-                    if sentence.endswith('?'):
-                        pause_duration = 300
-                    elif sentence.endswith('!'):
-                        pause_duration = 250
-                    
-                    silence = AudioSegment.silent(duration=pause_duration)
-                    final_audio = enhanced_audio + silence
-                    
-                    # Save enhanced audio
-                    final_path = f"temp/tts/enhanced_{uuid.uuid4()}.mp3"
-                    final_audio.export(final_path, format="mp3", bitrate="192k")
-                    
-                    # Create MoviePy audio clip
-                    audio_clip = AudioFileClip(final_path)
-                    audio_clips.append(audio_clip)
-                    
-                    # Store timing information
-                    duration = len(final_audio) / 1000.0
-                    timings.append({
-                        'text': sentence,
-                        'start': current_time,
-                        'end': current_time + duration
-                    })
-                    current_time += duration
-                    
-                    # Clean up temp files
-                    os.remove(temp_path)
-                    
-                except Exception as e:
-                    print(colored(f"Warning: Failed to process sentence: {e}", "yellow"))
-                    continue
-            
-            # Combine all clips
+            # Save the audio file
             final_path = f"temp/tts/{channel_type}_latest.mp3"
-            final_audio = concatenate_audioclips(audio_clips)
-            final_audio.write_audiofile(final_path, fps=44100, bitrate="192k")
+            os.makedirs(os.path.dirname(final_path), exist_ok=True)
             
-            self.sentence_timings = timings
+            with open(final_path, "wb") as f:
+                response.stream_to_file(final_path)
+            
+            print(colored("✓ Generated TTS audio", "green"))
             return final_path
             
         except Exception as e:
             print(colored(f"TTS generation failed: {str(e)}", "red"))
             return None
 
-    async def _generate_subtitles(self, script, tts_path, channel_type):
-        """Generate subtitles using stored timings"""
+    async def _generate_subtitles(self, script: str, tts_path: str, channel_type: str) -> str:
+        """Generate subtitles for the video"""
         try:
-            if not tts_path or not os.path.exists(tts_path):
-                raise ValueError("Invalid TTS audio path")
+            print(colored("\n=== Generating Subtitles ===", "blue"))
             
-            if not hasattr(self, 'sentence_timings'):
-                raise ValueError("No timing information available")
+            # Generate subtitles with audio timing
+            subtitles_path = generate_subtitles(
+                script=script,
+                audio_path=tts_path,
+                content_type=channel_type
+            )
             
-            subtitles_path = f"temp/subtitles/{channel_type}_latest.srt"
-            os.makedirs(os.path.dirname(subtitles_path), exist_ok=True)
+            if not subtitles_path:
+                raise ValueError("Failed to generate subtitles file")
             
-            # Use utf-8 encoding for writing subtitles
-            with open(subtitles_path, 'w', encoding='utf-8') as f:
-                for i, timing in enumerate(self.sentence_timings, 1):
-                    f.write(f"{i}\n")
-                    f.write(f"{self._format_time(timing['start'])} --> {self._format_time(timing['end'])}\n")
-                    f.write(f"{timing['text']}\n\n")
-            
+            print(colored("✓ Subtitles generated successfully", "green"))
             return subtitles_path
             
         except Exception as e:

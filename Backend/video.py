@@ -13,6 +13,8 @@ from urllib.parse import quote
 import random
 from pathlib import Path
 from moviepy.config import change_settings
+from openai import OpenAI
+import codecs
 
 # Configure MoviePy to use ImageMagick
 if os.getenv('IMAGEMAGICK_BINARY'):
@@ -46,30 +48,60 @@ def save_video(video_url: str, directory: str) -> str:
         print(colored(f"Error saving video: {str(e)}", "red"))
         return None
 
-def generate_subtitles(sentences: List[str], audio_clips: List[AudioFileClip]) -> str:
-    """Generates subtitles locally without external API"""
-    def convert_to_srt_time(seconds):
-        return str(timedelta(seconds=seconds)).rstrip('0').replace('.', ',')
-
-    subtitles = []
-    start_time = 0
-    
-    for i, (sentence, clip) in enumerate(zip(sentences, audio_clips), start=1):
-        end_time = start_time + clip.duration
-        subtitle = f"{i}\n{convert_to_srt_time(start_time)} --> {convert_to_srt_time(end_time)}\n{sentence}\n"
-        subtitles.append(subtitle)
-        start_time = end_time
-
-    subtitles_text = "\n".join(subtitles)
-    subtitles_path = f"temp/subtitles/{uuid.uuid4()}.srt"
-    os.makedirs("temp/subtitles", exist_ok=True)
-    
-    with open(subtitles_path, "w", encoding='utf-8') as f:
-        f.write(subtitles_text)
-    
-    # Equalize subtitles for better readability
-    srt_equalizer.equalize_srt_file(subtitles_path, subtitles_path, max_chars=10)
-    return subtitles_path
+def generate_subtitles(script: str, audio_path: str, content_type: str = None) -> str:
+    """Generate SRT subtitles from script"""
+    try:
+        # Get audio duration
+        audio = AudioFileClip(audio_path)
+        total_duration = audio.duration
+        audio.close()
+        
+        # Clean up script and split into lines
+        lines = []
+        for line in script.split('\n'):
+            line = line.strip()
+            if line and not line[0].isdigit():
+                clean_line = line.strip().strip('"')
+                if clean_line:
+                    lines.append(clean_line)
+        
+        # Calculate timing
+        avg_duration = total_duration / len(lines)
+        current_time = 0
+        srt_blocks = []
+        
+        for i, line in enumerate(lines, 1):
+            # Calculate duration
+            word_count = len(line.split())
+            duration = min(max(word_count * 0.3, 2.0), avg_duration * 1.2)
+            
+            # Format times
+            start_time = current_time
+            end_time = start_time + duration
+            
+            # Format for SRT
+            start_str = f"{int(start_time//3600):02d}:{int((start_time%3600)//60):02d}:{start_time%60:06.3f}".replace('.', ',')
+            end_str = f"{int(end_time//3600):02d}:{int((end_time%3600)//60):02d}:{end_time%60:06.3f}".replace('.', ',')
+            
+            # Create SRT block
+            srt_block = f"{i}\n{start_str} --> {end_str}\n{line}\n\n"
+            srt_blocks.append(srt_block)
+            
+            current_time = end_time + 0.1
+        
+        # Write SRT file
+        subtitles_path = "temp/subtitles/latest.srt"
+        os.makedirs(os.path.dirname(subtitles_path), exist_ok=True)
+        
+        # Write with UTF-8 encoding and BOM
+        with open(subtitles_path, 'w', encoding='utf-8-sig') as f:
+            f.write(''.join(srt_blocks))
+        
+        return subtitles_path
+        
+    except Exception as e:
+        print(colored(f"Error generating subtitles: {str(e)}", "red"))
+        return None
 
 def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
     """
@@ -362,66 +394,49 @@ def resize_to_vertical(clip):
         print(colored(f"Error in resize_to_vertical: {str(e)}", "red"))
         return None
 
-def create_subtitle_bg(txt):
-    """Create clean, reliable subtitles with ImageMagick"""
+def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
+    """Create simple centered subtitles with emoji support"""
     try:
-        # Clean and wrap text
-        txt = txt.strip()
+        if not txt:
+            return None
+            
+        # Clean text but preserve emojis
+        clean_txt = txt.strip().strip('"')
+        if not clean_txt:
+            return None
         
-        # Create text clip with ImageMagick
+        # Set duration
+        if is_last:
+            duration = total_duration - 0.1
+            fade_out = 0
+        else:
+            duration = 3.0
+            fade_out = 0.3
+        
+        # Create text clip with emoji support
         txt_clip = TextClip(
-            txt=txt,
-            font='Arial-Bold',
-            fontsize=70,
+            txt=clean_txt,
+            font='Arial',
+            fontsize=80,
             color='white',
             stroke_color='black',
-            stroke_width=2,
-            method='caption',  # Use caption method for better rendering
-            size=(900, None),
-            align='center',
-            kerning=2
+            stroke_width=4,
+            method='caption',
+            size=(1080, None),  # Full width
+            align='center'
         )
         
-        # Create background with proper padding
-        pad_x = 40
-        pad_y = 30
-        bg_width = txt_clip.w + pad_x
-        bg_height = txt_clip.h + pad_y
+        # Set duration and effects
+        txt_clip = txt_clip.set_duration(duration)
+        if not is_last:
+            txt_clip = txt_clip.crossfadeout(fade_out)
         
-        # Create solid background
-        bg_clip = ColorClip(
-            size=(bg_width, bg_height),
-            color=(0, 0, 0)
-        ).set_opacity(0.7)
-        
-        # Center text on background
-        txt_clip = txt_clip.set_position(('center', 'center'))
-        
-        # Combine with crossfade
-        composite = CompositeVideoClip(
-            [bg_clip, txt_clip],
-            size=(bg_width, bg_height)
-        )
-        
-        # Add fade effects
-        final_clip = (composite
-            .set_duration(2)
-            .fadein(0.25)
-            .fadeout(0.25))
-        
-        return final_clip
+        # Position at center
+        return txt_clip.set_position('center')
         
     except Exception as e:
-        print(colored(f"Subtitle creation error: {str(e)}", "red"))
-        # Simple fallback
-        return TextClip(
-            txt=txt,
-            font='Arial-Bold',
-            fontsize=70,
-            color='white',
-            method='caption',
-            size=(900, None)
-        ).set_duration(2)
+        print(colored(f"Subtitle error: {str(e)} for text: {txt}", "red"))
+        return None
 
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None):
     """Generate final video with audio and optional subtitles"""
@@ -435,14 +450,24 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         else:
             raise ValueError("Invalid background_path type")
 
-        # Load audio to get total duration
+        # Load audio and get base duration
         audio = AudioFileClip(audio_path)
-        total_duration = audio.duration
+        base_duration = audio.duration - 0.1  # Trim slight silence
         
-        # Calculate segment duration
+        # Create extended audio with silence for the extra duration
+        if subtitles_path and os.path.exists(subtitles_path):
+            # Create silence clip for extension
+            silence = AudioClip(lambda t: 0, duration=2)
+            extended_audio = concatenate_audioclips([audio, silence])
+            total_duration = base_duration + 2
+        else:
+            extended_audio = audio
+            total_duration = base_duration
+
+        # Process videos with the total duration
         num_videos = len(paths)
-        segment_duration = total_duration / num_videos
-        
+        segment_duration = base_duration / num_videos
+
         print(colored(f"\n=== Video Generation Info ===", "blue"))
         print(colored(f"Total duration: {total_duration:.2f}s", "cyan"))
         print(colored(f"Using {num_videos} videos", "cyan"))
@@ -507,95 +532,118 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
                 background_clips.append(fallback_clip)
                 current_time += segment_duration
 
-        # Combine all clips with composite method
+        # Combine all clips
         print(colored("\nCombining video segments...", "blue"))
         final_background = CompositeVideoClip(background_clips)
         final_background = final_background.set_duration(total_duration)
-        print(colored(f"Final duration: {final_background.duration:.2f}s", "cyan"))
         
-        # Create final video with audio
-        video = final_background.set_audio(audio)
+        # Create final video with extended audio
+        video = final_background.set_audio(extended_audio)
 
         # Add subtitles if provided
         if subtitles_path and os.path.exists(subtitles_path):
+            print(colored("\n=== Processing Subtitles ===", "blue"))
+            
             # Define styles with RGB tuples for colors
             styles = {
                 'tech_humor': {
-                    'font': 'Arial-Bold',  # Use more common font
-                    'fontsize': 85,
-                    'color': (255, 255, 255),  # white as RGB
-                    'stroke_color': (46, 204, 113),  # green as RGB
-                    'stroke_width': 3,
-                    'position': ('center', 960),
-                    'method': 'caption',
-                    'size': (800, None),
-                    'bg_color': (0, 0, 0),  # black as RGB
-                    'bg_opacity': 0.5,
-                    'line_spacing': 5
-                },
-                'ai_money': {
-                    'font': 'Arial-Bold',
+                    'font': 'Arial-Unicode-MS' if os.name == 'nt' else 'DejaVu-Sans',
                     'fontsize': 80,
-                    'color': (255, 215, 0),  # gold as RGB
-                    'stroke_color': (0, 0, 0),  # black as RGB
-                    'stroke_width': 3,
-                    'position': ('center', 960),
-                    'method': 'caption',
-                    'size': (850, None),
-                    'bg_color': (0, 0, 0),
+                    'color': 'white',
+                    'stroke_color': 'black',
+                    'stroke_width': 4,
+                    'size': (1000, 100),
                     'bg_opacity': 0.6,
-                    'line_spacing': 5
+                    'line_spacing': 8,
+                    'align': 'center',
+                    'method': 'label'  # Changed to 'label' for better emoji support
                 },
                 'default': {
-                    'font': 'Arial-Bold',
+                    'font': 'Arial-Unicode-MS' if os.name == 'nt' else 'DejaVu-Sans',
                     'fontsize': 80,
-                    'color': (255, 255, 255),  # white as RGB
-                    'stroke_color': (0, 0, 0),  # black as RGB
-                    'stroke_width': 3,
-                    'position': ('center', 960),
-                    'method': 'caption',
-                    'size': (800, None),
-                    'bg_color': (0, 0, 0),  # black as RGB
-                    'bg_opacity': 0.4,
-                    'line_spacing': 5
+                    'color': 'white',
+                    'stroke_color': 'black',
+                    'stroke_width': 4,
+                    'size': (1000, None),
+                    'bg_opacity': 0.6,
+                    'line_spacing': 8,
+                    'align': 'center',
+                    'method': 'label'
                 }
             }
             
             # Get style based on content type
             style = styles.get(content_type, styles['default'])
+            print(colored(f"Using style for: {content_type}", "cyan"))
             
-            def wrap_text(text, max_chars=25):
-                """Wrap text to prevent overflow"""
-                words = text.split()
-                lines = []
-                current_line = []
-                current_length = 0
+            # Create subtitles
+            try:
+                # Read subtitles with custom reader
+                subtitle_data = read_subtitles_file(subtitles_path)
                 
-                for word in words:
-                    word_length = len(word)
-                    if current_length + word_length + 1 <= max_chars:
-                        current_line.append(word)
-                        current_length += word_length + 1
-                    else:
-                        if current_line:
-                            lines.append(' '.join(current_line))
-                        current_line = [word]
-                        current_length = word_length
+                if not subtitle_data:
+                    raise ValueError("No subtitles found in file")
                 
-                if current_line:
-                    lines.append(' '.join(current_line))
+                # Get the last subtitle text
+                last_subtitle = subtitle_data[-1][1] if subtitle_data else ""
+                print(colored(f"Found {len(subtitle_data)} subtitles", "cyan"))
+                print(colored(f"Last subtitle: {last_subtitle}", "cyan"))
                 
-                return '\n'.join(lines)
-            
-            # Create background for subtitles
-            subtitles = SubtitlesClip(subtitles_path, create_subtitle_bg)
-            subtitles = subtitles.set_position(style['position'])
-            
-            # Composite with video using explicit size
-            video = CompositeVideoClip(
-                [video, subtitles],
-                size=(1080, 1920)  # Ensure final size is explicit
-            )
+                # Create generator function
+                def create_subtitle_clip(txt):
+                    return create_subtitle_bg(
+                        txt=txt,
+                        style=style,
+                        is_last=(txt.strip() == last_subtitle.strip()),
+                        total_duration=total_duration
+                    )
+                
+                # Create subtitles clip using the parsed data
+                def make_frame(t):
+                    try:
+                        # Find the current subtitle
+                        current_subtitle = next(
+                            (text for ((start, end), text) in subtitle_data 
+                             if start <= t <= end),
+                            None
+                        )
+                        
+                        if current_subtitle:
+                            clip = create_subtitle_clip(current_subtitle)
+                            if clip:
+                                frame = clip.get_frame(t)
+                                # Convert RGBA to RGB if needed
+                                if frame.shape[-1] == 4:
+                                    # Use alpha channel to blend with black background
+                                    alpha = frame[..., 3:] / 255.0
+                                    rgb = frame[..., :3]
+                                    return (rgb * alpha).astype(np.uint8)
+                                return frame
+                        
+                        # Return black frame in RGB format
+                        return np.zeros((1920, 1080, 3), dtype=np.uint8)
+                        
+                    except Exception as e:
+                        print(colored(f"Frame error at {t}: {str(e)}", "red"))
+                        return np.zeros((1920, 1080, 3), dtype=np.uint8)
+                
+                # Create the subtitle clip
+                subtitles = VideoClip(make_frame)
+                subtitles = subtitles.set_duration(total_duration)
+                
+                # Add subtitles to video
+                video = CompositeVideoClip(
+                    [video, subtitles],
+                    size=(1080, 1920)
+                ).set_duration(total_duration)
+                
+                print(colored("✓ Subtitles added to video", "green"))
+                
+            except Exception as e:
+                print(colored(f"Error adding subtitles: {str(e)}", "red"))
+                import traceback
+                print(colored(traceback.format_exc(), "red"))
+                print(colored("Continuing without subtitles", "yellow"))
 
         # Write final video
         output_path = "temp/final_video.mp4"
@@ -612,6 +660,7 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         video.close()
         final_background.close()
         audio.close()
+        extended_audio.close()
         for clip in background_clips:
             clip.close()
         
@@ -620,3 +669,91 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
     except Exception as e:
         print(colored(f"Error generating video: {str(e)}", "red"))
         return None
+
+def generate_tts_audio(sentences: List[str], voice: str = "nova", style: str = "humorous") -> AudioFileClip:
+    """Generate text-to-speech audio for the entire script at once"""
+    try:
+        # Join all sentences into one script, preserving natural pauses
+        full_script = ". ".join(sentence.strip().strip('"') for sentence in sentences)
+        
+        print(colored("\n=== Generating TTS Audio ===", "blue"))
+        print(colored(f"Using voice: {voice}", "cyan"))
+        print(colored(f"Full script:", "cyan"))
+        print(colored(f"{full_script}", "yellow"))
+        
+        # Single API call for the entire script
+        client = OpenAI()
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=full_script,
+            speed=0.95,  # Slightly slower for better clarity
+            response_format="mp3"
+        )
+        
+        print(colored("✓ Generated voice audio", "green"))
+        
+        # Save the audio file
+        audio_path = "temp/tts/tech_humor_latest.mp3"
+        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+        
+        with open(audio_path, "wb") as f:
+            for chunk in response.iter_bytes(chunk_size=4096):
+                f.write(chunk)
+        
+        # Load and process audio
+        audio_clip = AudioFileClip(audio_path)
+        
+        # Add a small fade out at the end
+        audio_clip = audio_clip.audio_fadeout(0.5)
+        
+        # Trim any silence at the end
+        duration = audio_clip.duration - 0.1
+        audio_clip = audio_clip.subclip(0, duration)
+        
+        print(colored(f"✓ Generated TTS audio: {audio_clip.duration:.2f}s", "green"))
+        
+        return audio_clip
+        
+    except Exception as e:
+        print(colored(f"Error generating TTS: {str(e)}", "red"))
+        return None
+
+def read_subtitles_file(filename):
+    """Read subtitles file with proper UTF-8 encoding"""
+    times_texts = []
+    current_times = None
+    current_text = ""
+    
+    try:
+        with open(filename, 'r', encoding='utf-8-sig') as f:
+            content = f.readlines()
+            
+        for line in content:
+            line = line.strip()
+            if not line:
+                if current_times and current_text:
+                    times_texts.append((current_times, current_text.strip()))
+                current_times, current_text = None, ""
+            elif '-->' in line:
+                # Parse timecodes
+                start, end = line.split('-->')
+                start = start.strip().replace(',', '.')
+                end = end.strip().replace(',', '.')
+                current_times = [float(sum(float(x) * 60 ** i for i, x in enumerate(reversed(t.split(':')))))\
+                               for t in [start, end]]
+            elif line.isdigit():
+                # Skip subtitle numbers
+                continue
+            elif current_times is not None:
+                current_text += line + ' '
+                
+        # Add the last subtitle if exists
+        if current_times and current_text:
+            times_texts.append((current_times, current_text.strip()))
+            
+        return times_texts
+        
+    except Exception as e:
+        print(colored(f"Error reading subtitles: {str(e)}", "red"))
+        return []
