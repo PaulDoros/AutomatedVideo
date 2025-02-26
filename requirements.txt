@@ -1,27 +1,27 @@
-g4f==0.4.7.3
-setuptools
-wheel
+# Core dependencies
+numpy==1.24.3
 requests==2.31.0
-moviepy==1.0.3
-termcolor==2.4.0
-flask==3.0.0
-curl_cffi
-flask-cors==4.0.0
-playsound==1.3.0
-Pillow==9.5.0
 python-dotenv==1.0.0
-srt_equalizer==0.1.8
-platformdirs==4.1.0
-undetected_chromedriver
-assemblyai
-brotli
-google-api-python-client 
-oauth2client
-openai>=1.0.0
-google-generativeai
-schedule==1.2.0
-opencv-python==4.8.0.74
-numpy>=1.24.0
-TTS>=0.13.0
-torch>=2.0.0
+moviepy==1.0.3
+termcolor==2.3.0
+Pillow==10.0.0
+openai==1.3.0
+
+# Audio processing
+pydub==0.25.1
+TTS==0.8.0
+torch==2.1.0
+torchaudio==2.1.0
+torchvision==0.16.0
+
+# Subtitle handling
+pysrt==1.1.2
+webvtt-py==0.4.6
+chardet==5.2.0
+
+# Video processing
+pytube==15.0.0
+g4f==0.1.7.9
+
+# Additional requirements
 scipy>=1.10.0

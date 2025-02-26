@@ -15,11 +15,15 @@ from moviepy.config import change_settings
 from openai import OpenAI
 import codecs
 import json
-from PIL import Image, ImageFont
+from PIL import Image, ImageFont, ImageDraw
 from datetime import datetime
 import html
 import traceback
 import pysrt
+import emoji
+from moviepy.video.VideoClip import ImageClip
+from emoji_data_python import emoji_data
+from io import BytesIO
 
 # First activate your virtual environment and install pysrt:
 # python -m pip install pysrt --no-cache-dir
@@ -397,6 +401,183 @@ def resize_to_vertical(clip):
         print(colored(f"Error in resize_to_vertical: {str(e)}", "red"))
         return None
 
+def get_emoji_image(emoji_char, size=120):
+    """Get colored emoji image using Twitter's emoji CDN"""
+    try:
+        # Create cache directory if it doesn't exist
+        cache_dir = "../temp/emoji_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # Convert emoji to unicode code points
+        emoji_code = "-".join(
+            format(ord(c), 'x').lower()
+            for c in emoji_char
+            if c != '\ufe0f'  # Skip variation selectors
+        )
+        
+        # Check cache first
+        cache_path = f"{cache_dir}/{emoji_code}.png"
+        if os.path.exists(cache_path):
+            emoji_img = Image.open(cache_path).convert('RGBA')
+            emoji_img = emoji_img.resize((size, size), Image.Resampling.LANCZOS)
+            return emoji_img
+
+        # Use Twitter's Twemoji CDN which is reliable and open source
+        url = f"https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/{emoji_code}.png"
+        
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                # Successfully got the emoji
+                emoji_img = Image.open(BytesIO(response.content)).convert('RGBA')
+                
+                # Resize emoji
+                emoji_img = emoji_img.resize((size, size), Image.Resampling.LANCZOS)
+                
+                # Cache the image
+                emoji_img.save(cache_path, 'PNG')
+                
+                return emoji_img
+            else:
+                print(colored(f"Failed to download emoji: {emoji_char} (HTTP {response.status_code})", "yellow"))
+                return create_fallback_emoji(size, emoji_char)
+        except Exception as e:
+            print(colored(f"Error downloading emoji: {str(e)}", "red"))
+            return create_fallback_emoji(size, emoji_char)
+            
+    except Exception as e:
+        print(colored(f"Error getting emoji image for {emoji_char}: {str(e)}", "red"))
+        return create_fallback_emoji(size, emoji_char)
+
+def create_fallback_emoji(size=120, emoji_char=None):
+    """Create a fallback colored symbol for emoji"""
+    img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    
+    # Draw a colorful circle with the emoji character if available
+    draw.ellipse([(10, 10), (size-10, size-10)], fill=(255, 200, 0, 255))
+    
+    # If we have emoji character, try to draw it in the center
+    if emoji_char:
+        try:
+            # Try to find a font that can display emojis
+            try:
+                font = ImageFont.truetype('seguiemj.ttf', size//2)
+            except:
+                font = ImageFont.load_default()
+                
+            # Draw the emoji character in black
+            text_bbox = draw.textbbox((0, 0), emoji_char, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            
+            x = (size - text_width) // 2
+            y = (size - text_height) // 2
+            
+            draw.text((x, y), emoji_char, fill=(0, 0, 0, 255), font=font)
+        except:
+            pass  # Just use the circle if we can't render the text
+    
+    return img
+
+def create_text_with_emoji(txt, size=(1000, 800)):
+    """Create text with colored emojis using Pillow"""
+    try:
+        # Create a transparent background - make it wider for better Shorts fit
+        image = Image.new('RGBA', (1080, 800), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        
+        # Split text and emojis
+        words = []
+        current_word = ""
+        
+        for char in txt:
+            if emoji.is_emoji(char):
+                if current_word:
+                    words.append(("text", current_word.strip()))
+                    current_word = ""
+                words.append(("emoji", char))
+            else:
+                current_word += char
+        if current_word:
+            words.append(("text", current_word.strip()))
+
+        # Load font for text - larger for better visibility on mobile
+        try:
+            text_font = ImageFont.truetype('arial.ttf', 110)  # Larger font for mobile
+        except:
+            text_font = ImageFont.load_default()
+
+        # Calculate lines with proper word wrapping - narrower for vertical format
+        lines = []
+        current_line = []
+        current_width = 0
+        max_width = 900  # Narrower width for better Shorts format
+
+        for word_type, word in words:
+            if word_type == "text":
+                word_bbox = draw.textbbox((0, 0), word + " ", font=text_font)
+                word_width = word_bbox[2] - word_bbox[0]
+            else:  # emoji
+                word_width = 130  # Larger emoji size for visibility
+            
+            if current_width + word_width <= max_width:
+                current_line.append((word_type, word))
+                current_width += word_width + 10
+            else:
+                lines.append(current_line)
+                current_line = [(word_type, word)]
+                current_width = word_width
+        
+        if current_line:
+            lines.append(current_line)
+
+        # Calculate total height with more line spacing for readability
+        line_height = max(text_font.size, 130) + 30  # More spacing between lines
+        total_height = len(lines) * line_height
+        y = (image.height - total_height) // 2
+
+        # Draw each line
+        for line in lines:
+            line_width = sum(130 if t == "emoji" else draw.textbbox((0, 0), w + " ", font=text_font)[2] 
+                           for t, w in line)
+            x = (image.width - line_width) // 2  # Center in frame
+
+            for word_type, word in line:
+                if word_type == "text":
+                    # Draw text with stroke
+                    stroke_width = 6  # Thicker stroke for mobile visibility
+                    for adj in range(-stroke_width, stroke_width+1):
+                        for adj2 in range(-stroke_width, stroke_width+1):
+                            draw.text((x+adj, y+adj2), word, font=text_font, fill=(0, 0, 0, 255))
+                    draw.text((x, y), word, font=text_font, fill=(255, 255, 255, 255))
+                    bbox = draw.textbbox((0, 0), word + " ", font=text_font)
+                    x += bbox[2] - bbox[0] + 15  # More spacing between words
+                else:
+                    # Draw colored emoji
+                    emoji_img = get_emoji_image(word, size=130)  # Larger emoji
+                    if emoji_img:
+                        try:
+                            emoji_y = y + (text_font.size - 130) // 2
+                            # Use simplified pasting that works better
+                            image.paste(emoji_img, (x, emoji_y), emoji_img)
+                        except Exception as e:
+                            print(colored(f"Error pasting emoji: {str(e)}", "yellow"))
+                            # Alternative paste method
+                            draw.rectangle(
+                                [(x, emoji_y), (x+130, emoji_y+130)],
+                                fill=(255, 200, 0, 255)
+                            )
+                    x += 130 + 15  # Larger emoji size + more spacing
+
+            y += line_height
+
+        return image
+        
+    except Exception as e:
+        print(colored(f"Error creating text with emoji: {str(e)}", "red"))
+        return None
+
 def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
     """Create dynamic centered subtitles with emoji support"""
     try:
@@ -409,54 +590,31 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         if not clean_txt:
             return None
         
-        # Set duration
-        if is_last:
-            duration = total_duration + 1.8
-            fade_out = 0.6
+        # Create image with text and emojis - optimized for Shorts
+        text_image = create_text_with_emoji(clean_txt)
+        if text_image is None:
+            return None
+        
+        # Convert PIL image to MoviePy clip
+        txt_clip = ImageClip(np.array(text_image))
+        
+        # Set duration based on whether it's the last subtitle
+        if is_last and total_duration is not None:
+            duration = total_duration + 1.5
         else:
-            duration = 3.2
-            fade_out = 0.35
-        
-        # Create text clip with emoji support
-        txt_clip = TextClip(
-            txt=clean_txt,
-            font='Segoe-UI-Emoji',  # Font with emoji support
-            fontsize=110,
-            color='white',
-            stroke_color='black',
-            stroke_width=6,
-            method='caption',  # Better for emoji support
-            size=(900, None),
-            align='center',
-            bg_color='transparent'
-        ).set_position('center')
-        
-        # Create background
-        w, h = txt_clip.size
-        bg_w, bg_h = w + 80, h + 50
-        
-        # Create semi-transparent background
-        bg_clip = ColorClip(
-            size=(bg_w, bg_h),
-            color=(0, 0, 0)
-        ).set_opacity(0.6)
-        
-        # Combine text and background
-        txt_with_bg = CompositeVideoClip(
-            [bg_clip, txt_clip],
-            size=(bg_w, bg_h)
-        )
+            duration = 3.2  # Standard duration for most subtitles
         
         # Add effects
-        final_clip = (txt_with_bg
+        final_clip = (txt_clip
             .set_duration(duration)
             .set_position(('center', 'center'))
             .crossfadein(0.2))
         
-        if not is_last:
-            final_clip = final_clip.crossfadeout(fade_out)
+        # Add fade out based on position
+        if is_last:
+            final_clip = final_clip.crossfadeout(0.8)
         else:
-            final_clip = final_clip.crossfadeout(0.6)
+            final_clip = final_clip.crossfadeout(0.35)
         
         return final_clip
         
@@ -732,56 +890,36 @@ def read_subtitles_file(filename):
                 # Skip subtitle numbers
                 continue
             elif current_times is not None:
-                current_text += line + ' '
-                
-        # Add the last subtitle if exists
-        if current_times and current_text:
-            times_texts.append((current_times, current_text.strip()))
-            
+                current_text += line + "\n"
+        
         return times_texts
         
     except Exception as e:
-        print(colored(f"Error reading subtitles: {str(e)}", "red"))
-        return []
+        print(colored(f"Error reading subtitles file: {str(e)}", "red"))
+        return None
 
-def test_subtitles():
-    """Test function for subtitle styling"""
+def test_single_subtitle():
+    """Test function for single subtitle with emojis"""
     try:
-        # Create a test video clip (black background)
-        test_video = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_duration(15)
+        # Create a test video clip (dark gray background)
+        test_video = ColorClip(size=(1080, 1920), color=(40, 40, 40)).set_duration(3)
         
-        # Create test subtitles file
+        # Create test subtitles file with just one subtitle
         test_srt = """1
 00:00:00,000 --> 00:00:03,000
-Why do programmers love coffee so much? ☕️
-
-2
-00:00:03,000 --> 00:00:06,000
-Because it turns their 'do not disturb' mode on. 🚫👩‍💻
-
-3
-00:00:06,000 --> 00:00:09,000
-But without it, they hit a real bug...
-
-4
-00:00:09,000 --> 00:00:12,000
-Sleep deprivation exception caught! 😴
-
-5
-00:00:12,000 --> 00:00:15,000
-Smash like for caffeine boosts! ⚡"""
+Because it turns their 'do not disturb' mode on. 🚫👩‍💻"""
 
         # Save test subtitles
-        test_srt_path = "../temp/test_subs.srt"
-        with open(test_srt_path, "w", encoding="utf-8") as f:
+        test_srt_path = "../temp/test_single_sub.srt"
+        with open(test_srt_path, "w", encoding="utf-8-sig") as f:
             f.write(test_srt)
 
         # Process subtitles
-        print(colored("\n=== Testing Subtitle Styling ===", "blue"))
+        print(colored("\n=== Testing Single Subtitle ===", "blue"))
         final_video = process_subtitles(test_srt_path, test_video)
         
         # Save test video
-        output_path = "../temp/subtitle_test.mp4"
+        output_path = "../temp/single_subtitle_test.mp4"
         final_video.write_videofile(output_path, fps=30)
         
         print(colored(f"\n✓ Test video saved to: {output_path}", "green"))
@@ -790,6 +928,5 @@ Smash like for caffeine boosts! ⚡"""
         print(colored(f"Error in subtitle test: {str(e)}", "red"))
         print(colored(traceback.format_exc(), "red"))
 
-# Run the test if this file is run directly
 if __name__ == "__main__":
-    test_subtitles()
+    test_single_subtitle()
