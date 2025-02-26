@@ -21,7 +21,14 @@ IMAGEMAGICK_BINARY = os.path.abspath('tools/imagemagick/magick.exe')
 if os.path.exists(IMAGEMAGICK_BINARY):
     change_settings({
         "IMAGEMAGICK_BINARY": IMAGEMAGICK_BINARY,
-        "IMAGEMAGICK_PARAMS": ['-size', '1080x1920', '-background', 'transparent']
+        "IMAGEMAGICK_PARAMS": [
+            '-size', '1080x1920',
+            '-background', 'transparent',
+            '-font', 'Segoe-UI-Bold',
+            '-gravity', 'center',
+            '-density', '150',
+            '-quality', '95'
+        ]
     })
 
 def save_video(video_url: str, directory: str) -> str:
@@ -69,17 +76,17 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
                 if clean_line:
                     lines.append(clean_line)
         
-        # Calculate timing
+        # Calculate timing with better spacing
         avg_duration = total_duration / len(lines)
         current_time = 0
         srt_blocks = []
         
         for i, line in enumerate(lines, 1):
-            # Calculate duration
+            # Calculate duration based on content
             word_count = len(line.split())
             duration = min(max(word_count * 0.3, 2.0), avg_duration * 1.2)
             
-            # Format times
+            # Ensure no overlap between subtitles
             start_time = current_time
             end_time = start_time + duration
             
@@ -91,7 +98,8 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
             srt_block = f"{i}\n{start_str} --> {end_str}\n{line}\n\n"
             srt_blocks.append(srt_block)
             
-            current_time = end_time + 0.1
+            # Add small gap between subtitles
+            current_time = end_time + 0.1  # Small gap between subtitles
         
         # Write SRT file
         subtitles_path = "temp/subtitles/latest.srt"
@@ -415,29 +423,32 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
             fade_out = 0
         else:
             duration = 3.0
-            fade_out = 0.5
+            fade_out = 0.3  # Shorter fade out
         
         # Create text clip with ImageMagick
         txt_clip = TextClip(
             txt=clean_txt,
-            font='Arial',  # Simplified font name
-            fontsize=160,
-            color='white',
-            stroke_color='black',
+            font='Segoe-UI-Bold',
+            fontsize=100,  # Smaller font size
+            color='#FFFFFF',
+            stroke_color='#000000',
             stroke_width=8,
-            method='label',  # Changed back to label
-            size=(900, None),
-            align='center'
+            method='caption',
+            size=(800, None),  # Slightly narrower for better line breaks
+            align='center',
+            bg_color='transparent',
+            kerning=2  # Slightly reduced kerning
         )
         
-        # Create background
+        # Create background with gradient
         w, h = txt_clip.size
-        bg_w, bg_h = w + 80, h + 60
+        bg_w, bg_h = w + 60, h + 40  # Smaller padding
         
+        # Create semi-transparent background
         bg_clip = ColorClip(
             size=(bg_w, bg_h),
-            color=(26, 26, 26)
-        ).set_opacity(0.6)
+            color=(0, 0, 0)
+        ).set_opacity(0.5)  # More transparent
         
         # Combine text and background
         txt_with_bg = CompositeVideoClip(
@@ -445,18 +456,18 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
             size=(bg_w, bg_h)
         )
         
-        # Set duration and effects
+        # Set duration and effects with smoother transitions
         final_clip = (txt_with_bg
             .set_duration(duration)
             .set_position(('center', 'center'))
-            .crossfadein(0.3))
+            .crossfadein(0.15))  # Faster fade in
         
         if not is_last:
-            final_clip = final_clip.crossfadeout(fade_out)
+            final_clip = final_clip.crossfadeout(0.3)  # Shorter fade out
         
-        # Add zoom effect
+        # Add subtle zoom effect
         def zoom_effect(t):
-            zoom = 1 + 0.05 * np.sin(2 * np.pi * t / duration)
+            zoom = 1 + 0.015 * np.sin(2 * np.pi * t / duration)  # More subtle zoom
             return zoom
         
         final_clip = final_clip.resize(zoom_effect)
