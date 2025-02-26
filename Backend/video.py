@@ -64,7 +64,7 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
     try:
         # Get audio duration
         audio = AudioFileClip(audio_path)
-        total_duration = audio.duration
+        total_duration = audio.duration - 0.1  # Trim end silence
         audio.close()
         
         # Clean up script and split into lines
@@ -84,22 +84,26 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         for i, line in enumerate(lines, 1):
             # Calculate duration based on content
             word_count = len(line.split())
-            duration = min(max(word_count * 0.3, 2.0), avg_duration * 1.2)
+            is_last = (i == len(lines))
             
-            # Ensure no overlap between subtitles
+            if is_last:
+                duration = avg_duration + 2.5  # Extra time for last subtitle
+            else:
+                duration = min(max(word_count * 0.4, 2.5), avg_duration * 1.2)  # Longer minimum duration
+            
+            # Format times
             start_time = current_time
             end_time = start_time + duration
             
-            # Format for SRT
+            # Format for SRT with proper encoding
             start_str = f"{int(start_time//3600):02d}:{int((start_time%3600)//60):02d}:{start_time%60:06.3f}".replace('.', ',')
             end_str = f"{int(end_time//3600):02d}:{int((end_time%3600)//60):02d}:{end_time%60:06.3f}".replace('.', ',')
             
-            # Create SRT block
+            # Create SRT block with emoji support
             srt_block = f"{i}\n{start_str} --> {end_str}\n{line}\n\n"
             srt_blocks.append(srt_block)
             
-            # Add small gap between subtitles
-            current_time = end_time + 0.1  # Small gap between subtitles
+            current_time = end_time + 0.2  # Slightly longer gap between subtitles
         
         # Write SRT file
         subtitles_path = "temp/subtitles/latest.srt"
@@ -419,55 +423,57 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         
         # Set duration
         if is_last:
-            duration = total_duration - 0.1
-            fade_out = 0
+            duration = total_duration + 2.5  # Extend last subtitle even more
+            fade_out = 0.8  # Longer fade for last subtitle
         else:
-            duration = 3.0
-            fade_out = 0.3  # Shorter fade out
+            duration = 3.5  # Longer duration for each subtitle
+            fade_out = 0.4
         
         # Create text clip with ImageMagick
         txt_clip = TextClip(
             txt=clean_txt,
-            font='Segoe-UI-Bold',
-            fontsize=100,  # Smaller font size
-            color='#FFFFFF',
-            stroke_color='#000000',
-            stroke_width=8,
-            method='caption',
-            size=(800, None),  # Slightly narrower for better line breaks
+            font='Segoe-UI-Emoji',  # Keep emoji font
+            fontsize=90,
+            color='#FFFFFF',  # Pure white
+            stroke_color='#000000',  # Pure black
+            stroke_width=8,  # Thicker stroke
+            method='caption',  # Keep caption for emoji support
+            size=(800, None),
             align='center',
             bg_color='transparent',
-            kerning=2  # Slightly reduced kerning
-        )
+            kerning=2
+        ).set_position('center')
         
-        # Create background with gradient
+        # Create background with more opacity
         w, h = txt_clip.size
-        bg_w, bg_h = w + 60, h + 40  # Smaller padding
+        bg_w, bg_h = w + 60, h + 40
         
-        # Create semi-transparent background
         bg_clip = ColorClip(
             size=(bg_w, bg_h),
             color=(0, 0, 0)
-        ).set_opacity(0.5)  # More transparent
+        ).set_opacity(0.7)  # More opaque background
         
         # Combine text and background
         txt_with_bg = CompositeVideoClip(
-            [bg_clip, txt_clip.set_position('center')],
+            [bg_clip, txt_clip],
             size=(bg_w, bg_h)
         )
         
-        # Set duration and effects with smoother transitions
+        # Set duration and effects
         final_clip = (txt_with_bg
             .set_duration(duration)
             .set_position(('center', 'center'))
-            .crossfadein(0.15))  # Faster fade in
+            .crossfadein(0.3))
         
         if not is_last:
-            final_clip = final_clip.crossfadeout(0.3)  # Shorter fade out
+            final_clip = final_clip.crossfadeout(fade_out)
+        else:
+            # For last subtitle, fade out very gently at the very end
+            final_clip = final_clip.crossfadeout(0.8)
         
         # Add subtle zoom effect
         def zoom_effect(t):
-            zoom = 1 + 0.015 * np.sin(2 * np.pi * t / duration)  # More subtle zoom
+            zoom = 1 + 0.02 * np.sin(2 * np.pi * t / 4)  # Slower, gentler zoom
             return zoom
         
         final_clip = final_clip.resize(zoom_effect)
