@@ -28,23 +28,14 @@ from pydub import AudioSegment
 import openai
 
 # Third-party imports
-try:
-    from TTS.api import TTS
-except ImportError:
-    print("Please install TTS: pip install TTS")
-    TTS = None
 
-try:
-    import torch
-except ImportError:
-    print("Please install PyTorch: pip install torch")
-    torch = None
+from TTS.api import TTS
 
-try:
-    from scipy.io import wavfile
-except ImportError:
-    print("Please install SciPy: pip install scipy")
-    wavfile = None
+
+import torch
+
+from scipy.io import wavfile
+
 
 class AudioManager:
     def __init__(self):
@@ -54,21 +45,24 @@ class AudioManager:
                     'nova': {'weight': 3, 'description': 'Energetic female, perfect for tech humor'},
                     'echo': {'weight': 3, 'description': 'Dynamic male, great for casual tech content'}
                 },
-                'style': 'humorous'
+                'style': 'humorous',
+                'prompt': "Read this text with an energetic, playful tone and a sense of humor."
             },
             'ai_money': {
                 'voices': {
                     'onyx': {'weight': 3, 'description': 'Professional male voice'},
                     'shimmer': {'weight': 2, 'description': 'Clear female voice'}
                 },
-                'style': 'professional'
+                'style': 'professional',
+                'prompt': "Deliver the following content in a clear, confident, and professional manner."
             },
             'default': {
                 'voices': {
                     'echo': {'weight': 2, 'description': 'Balanced male voice'},
                     'nova': {'weight': 2, 'description': 'Engaging female voice'}
                 },
-                'style': 'casual'
+                'style': 'casual',
+                'prompt': "Please read the following text in a natural, conversational tone."
             }
         }
         

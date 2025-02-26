@@ -1,7 +1,6 @@
 import os
 import uuid
 import requests
-import srt_equalizer
 from typing import List
 from moviepy.editor import *
 from termcolor import colored
@@ -15,21 +14,15 @@ from pathlib import Path
 from moviepy.config import change_settings
 from openai import OpenAI
 import codecs
+import json
+from PIL import Image, ImageFont
+from datetime import datetime
+import html
+import traceback
+import pysrt
 
-# Configure MoviePy to use ImageMagick with specific settings
-IMAGEMAGICK_BINARY = os.path.abspath('tools/imagemagick/magick.exe')
-if os.path.exists(IMAGEMAGICK_BINARY):
-    change_settings({
-        "IMAGEMAGICK_BINARY": IMAGEMAGICK_BINARY,
-        "IMAGEMAGICK_PARAMS": [
-            '-size', '1080x1920',
-            '-background', 'transparent',
-            '-font', 'Segoe-UI-Bold',
-            '-gravity', 'center',
-            '-density', '150',
-            '-quality', '95'
-        ]
-    })
+# First activate your virtual environment and install pysrt:
+# python -m pip install pysrt --no-cache-dir
 
 def save_video(video_url: str, directory: str) -> str:
     """Saves a video from URL to specified directory"""
@@ -62,21 +55,15 @@ def save_video(video_url: str, directory: str) -> str:
 def generate_subtitles(script: str, audio_path: str, content_type: str = None) -> str:
     """Generate SRT subtitles from script"""
     try:
-        # Get audio duration
+        # Get audio duration and trim end silence
         audio = AudioFileClip(audio_path)
-        total_duration = audio.duration - 0.1  # Trim end silence
+        total_duration = audio.duration - 0.15  # Trim more silence
         audio.close()
         
-        # Clean up script and split into lines
-        lines = []
-        for line in script.split('\n'):
-            line = line.strip()
-            if line and not line[0].isdigit():
-                clean_line = line.strip().strip('"')
-                if clean_line:
-                    lines.append(clean_line)
-        
         # Calculate timing with better spacing
+        lines = [line.strip() for line in script.split('\n') 
+                if line.strip() and not line[0].isdigit()]
+        
         avg_duration = total_duration / len(lines)
         current_time = 0
         srt_blocks = []
@@ -87,23 +74,23 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
             is_last = (i == len(lines))
             
             if is_last:
-                duration = avg_duration + 2.5  # Extra time for last subtitle
+                duration = avg_duration + 2.5
             else:
-                duration = min(max(word_count * 0.4, 2.5), avg_duration * 1.2)  # Longer minimum duration
+                # Start subtitles slightly earlier
+                duration = min(max(word_count * 0.4, 2.5), avg_duration * 1.2)
             
-            # Format times
-            start_time = current_time
+            # Start each subtitle 0.2s earlier for better sync
+            start_time = max(0, current_time - 0.2)
             end_time = start_time + duration
             
-            # Format for SRT with proper encoding
+            # Format for SRT
             start_str = f"{int(start_time//3600):02d}:{int((start_time%3600)//60):02d}:{start_time%60:06.3f}".replace('.', ',')
             end_str = f"{int(end_time//3600):02d}:{int((end_time%3600)//60):02d}:{end_time%60:06.3f}".replace('.', ',')
             
-            # Create SRT block with emoji support
             srt_block = f"{i}\n{start_str} --> {end_str}\n{line}\n\n"
             srt_blocks.append(srt_block)
             
-            current_time = end_time + 0.2  # Slightly longer gap between subtitles
+            current_time = end_time + 0.1
         
         # Write SRT file
         subtitles_path = "temp/subtitles/latest.srt"
@@ -411,47 +398,48 @@ def resize_to_vertical(clip):
         return None
 
 def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
-    """Create dynamic centered subtitles with ImageMagick"""
+    """Create dynamic centered subtitles with emoji support"""
     try:
         if not txt:
             return None
             
-        # Clean text but preserve emojis
-        clean_txt = txt.strip().strip('"') if isinstance(txt, str) else txt[1]
+        # Clean text while preserving emojis
+        clean_txt = txt if isinstance(txt, str) else str(txt)
+        clean_txt = clean_txt.strip().strip('"')
         if not clean_txt:
             return None
         
         # Set duration
         if is_last:
-            duration = total_duration + 2.5  # Extend last subtitle even more
-            fade_out = 0.8  # Longer fade for last subtitle
+            duration = total_duration + 1.8
+            fade_out = 0.6
         else:
-            duration = 3.5  # Longer duration for each subtitle
-            fade_out = 0.4
+            duration = 3.2
+            fade_out = 0.35
         
-        # Create text clip with ImageMagick
+        # Create text clip with emoji support
         txt_clip = TextClip(
             txt=clean_txt,
-            font='Segoe-UI-Emoji',  # Keep emoji font
-            fontsize=90,
-            color='#FFFFFF',  # Pure white
-            stroke_color='#000000',  # Pure black
-            stroke_width=8,  # Thicker stroke
-            method='caption',  # Keep caption for emoji support
-            size=(800, None),
+            font='Segoe-UI-Emoji',  # Font with emoji support
+            fontsize=110,
+            color='white',
+            stroke_color='black',
+            stroke_width=6,
+            method='caption',  # Better for emoji support
+            size=(900, None),
             align='center',
-            bg_color='transparent',
-            kerning=2
+            bg_color='transparent'
         ).set_position('center')
         
-        # Create background with more opacity
+        # Create background
         w, h = txt_clip.size
-        bg_w, bg_h = w + 60, h + 40
+        bg_w, bg_h = w + 80, h + 50
         
+        # Create semi-transparent background
         bg_clip = ColorClip(
             size=(bg_w, bg_h),
             color=(0, 0, 0)
-        ).set_opacity(0.7)  # More opaque background
+        ).set_opacity(0.6)
         
         # Combine text and background
         txt_with_bg = CompositeVideoClip(
@@ -459,24 +447,16 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
             size=(bg_w, bg_h)
         )
         
-        # Set duration and effects
+        # Add effects
         final_clip = (txt_with_bg
             .set_duration(duration)
             .set_position(('center', 'center'))
-            .crossfadein(0.3))
+            .crossfadein(0.2))
         
         if not is_last:
             final_clip = final_clip.crossfadeout(fade_out)
         else:
-            # For last subtitle, fade out very gently at the very end
-            final_clip = final_clip.crossfadeout(0.8)
-        
-        # Add subtle zoom effect
-        def zoom_effect(t):
-            zoom = 1 + 0.02 * np.sin(2 * np.pi * t / 4)  # Slower, gentler zoom
-            return zoom
-        
-        final_clip = final_clip.resize(zoom_effect)
+            final_clip = final_clip.crossfadeout(0.6)
         
         return final_clip
         
@@ -484,6 +464,65 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         print(colored(f"Subtitle error: {str(e)}", "red"))
         print(colored(f"Text content: {txt}", "yellow"))
         return None
+
+def process_subtitles(subtitles_path, video):
+    """Process subtitles using pysrt"""
+    try:
+        print(colored("\n=== Processing Subtitles ===", "blue"))
+        
+        # Read subtitles with pysrt
+        subs = pysrt.open(subtitles_path, encoding='utf-8-sig')
+        subtitle_clips = []
+        
+        print(colored(f"Found {len(subs)} subtitles", "cyan"))
+        
+        for i, sub in enumerate(subs):
+            try:
+                # Convert timecode to seconds
+                start_time = sub.start.seconds + sub.start.milliseconds/1000.0
+                end_time = sub.end.seconds + sub.end.milliseconds/1000.0
+                duration = end_time - start_time
+                
+                # Get text content directly
+                text = sub.text.strip()
+                
+                clip = create_subtitle_bg(
+                    txt=text,  # Pass text directly
+                    is_last=(i == len(subs) - 1),
+                    total_duration=duration
+                )
+                
+                if clip:
+                    clip = clip.set_start(start_time)
+                    subtitle_clips.append(clip)
+                    print(colored(f"Created subtitle: {text}", "cyan"))
+                    
+            except Exception as e:
+                print(colored(f"Error processing subtitle {i+1}: {str(e)}", "red"))
+                print(colored(traceback.format_exc(), "red"))
+        
+        if subtitle_clips:
+            # Combine all subtitle clips
+            subtitles = CompositeVideoClip(
+                subtitle_clips,
+                size=video.size
+            ).set_duration(video.duration)
+            
+            # Add subtitles to video
+            final_video = CompositeVideoClip([
+                video,
+                subtitles
+            ])
+            
+            print(colored("✓ Subtitles added successfully", "green"))
+            return final_video
+        
+        return video
+        
+    except Exception as e:
+        print(colored(f"Error processing subtitles: {str(e)}", "red"))
+        print(colored(traceback.format_exc(), "red"))
+        return video
 
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None):
     """Generate final video with audio and optional subtitles"""
@@ -590,75 +629,7 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         # Add subtitles if provided
         if subtitles_path and os.path.exists(subtitles_path):
             print(colored("\n=== Processing Subtitles ===", "blue"))
-            try:
-                # Read subtitles directly with proper encoding
-                with open(subtitles_path, 'r', encoding='utf-8-sig') as f:
-                    subtitle_data = []
-                    current_times = None
-                    current_text = ""
-                    
-                    for line in f.readlines():
-                        line = line.strip()
-                        if '-->' in line:
-                            start, end = line.split('-->')
-                            start = start.strip().replace(',', '.')
-                            end = end.strip().replace(',', '.')
-                            current_times = [float(sum(float(x) * 60 ** i for i, x in enumerate(reversed(t.split(':')))))\
-                               for t in [start, end]]
-                        elif line.isdigit():
-                            # Skip subtitle numbers
-                            continue
-                        elif current_times is not None:
-                            current_text = line
-                            if current_times:
-                                subtitle_data.append((current_times, current_text))
-                                current_times = None
-                
-                # Create subtitle clips
-                subtitle_clips = []
-                for (start, end), text in subtitle_data:
-                    try:
-                        # Extract text from tuple if needed
-                        subtitle_text = text[1] if isinstance(text, tuple) else text
-                        
-                        clip = create_subtitle_bg(
-                            txt=subtitle_text,
-                            style=None,
-                            is_last=(text == subtitle_data[-1][1]),
-                            total_duration=end - start
-                        )
-                        
-                        if clip:
-                            clip = (clip
-                                .set_start(start)
-                                .set_duration(end - start))
-                            subtitle_clips.append(clip)
-                            print(colored(f"Created subtitle: {subtitle_text}", "cyan"))
-                            
-                    except Exception as e:
-                        print(colored(f"Error creating subtitle clip: {str(e)}", "red"))
-                
-                # Combine all subtitle clips
-                if subtitle_clips:
-                    print(colored(f"Combining {len(subtitle_clips)} subtitle clips", "cyan"))
-                    subtitles = CompositeVideoClip(
-                        subtitle_clips,
-                        size=(1080, 1920)
-                    ).set_duration(total_duration)
-                    
-                    # Add subtitles to video
-                    video = CompositeVideoClip(
-                        [video, subtitles],
-                        size=(1080, 1920)
-                    ).set_duration(total_duration)
-                    
-                    print(colored("✓ Subtitles added to video", "green"))
-                
-            except Exception as e:
-                print(colored(f"Error adding subtitles: {str(e)}", "red"))
-                import traceback
-                print(colored(traceback.format_exc(), "red"))
-                print(colored("Continuing without subtitles", "yellow"))
+            video = process_subtitles(subtitles_path, video)
 
         # Write final video
         output_path = "temp/final_video.mp4"
@@ -772,3 +743,53 @@ def read_subtitles_file(filename):
     except Exception as e:
         print(colored(f"Error reading subtitles: {str(e)}", "red"))
         return []
+
+def test_subtitles():
+    """Test function for subtitle styling"""
+    try:
+        # Create a test video clip (black background)
+        test_video = ColorClip(size=(1080, 1920), color=(0, 0, 0)).set_duration(15)
+        
+        # Create test subtitles file
+        test_srt = """1
+00:00:00,000 --> 00:00:03,000
+Why do programmers love coffee so much? ☕️
+
+2
+00:00:03,000 --> 00:00:06,000
+Because it turns their 'do not disturb' mode on. 🚫👩‍💻
+
+3
+00:00:06,000 --> 00:00:09,000
+But without it, they hit a real bug...
+
+4
+00:00:09,000 --> 00:00:12,000
+Sleep deprivation exception caught! 😴
+
+5
+00:00:12,000 --> 00:00:15,000
+Smash like for caffeine boosts! ⚡"""
+
+        # Save test subtitles
+        test_srt_path = "../temp/test_subs.srt"
+        with open(test_srt_path, "w", encoding="utf-8") as f:
+            f.write(test_srt)
+
+        # Process subtitles
+        print(colored("\n=== Testing Subtitle Styling ===", "blue"))
+        final_video = process_subtitles(test_srt_path, test_video)
+        
+        # Save test video
+        output_path = "../temp/subtitle_test.mp4"
+        final_video.write_videofile(output_path, fps=30)
+        
+        print(colored(f"\n✓ Test video saved to: {output_path}", "green"))
+        
+    except Exception as e:
+        print(colored(f"Error in subtitle test: {str(e)}", "red"))
+        print(colored(traceback.format_exc(), "red"))
+
+# Run the test if this file is run directly
+if __name__ == "__main__":
+    test_subtitles()
