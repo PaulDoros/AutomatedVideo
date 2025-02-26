@@ -24,6 +24,7 @@ import emoji
 from moviepy.video.VideoClip import ImageClip
 from emoji_data_python import emoji_data
 from io import BytesIO
+import re
 
 # First activate your virtual environment and install pysrt:
 # python -m pip install pysrt --no-cache-dir
@@ -56,63 +57,75 @@ def save_video(video_url: str, directory: str) -> str:
         print(colored(f"Error saving video: {str(e)}", "red"))
         return None
 
+def format_time(seconds):
+    """Format time in seconds to SRT format (HH:MM:SS,mmm)"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    seconds = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}".replace(".", ",")
+
 def generate_subtitles(script: str, audio_path: str, content_type: str = None) -> str:
-    """Generate SRT subtitles from script"""
+    """Generate SRT subtitles from script with fixed emoji handling"""
     try:
-        # Get audio duration and trim end silence
+        # Get audio duration
         audio = AudioFileClip(audio_path)
-        total_duration = audio.duration - 0.15  # Trim more silence
-        audio.close()
+        total_duration = audio.duration
         
-        # Calculate timing with better spacing
-        lines = [line.strip() for line in script.split('\n') 
-                if line.strip() and not line[0].isdigit()]
+        # Create temp directory
+        os.makedirs("temp/subtitles", exist_ok=True)
+        subtitles_path = "temp/subtitles/generated_subtitles.srt"
         
-        avg_duration = total_duration / len(lines)
-        current_time = 0
-        srt_blocks = []
+        # Process script line by line to preserve original emoji positioning
+        lines = script.replace('"', '').split('\n')
+        sentences = []
         
-        for i, line in enumerate(lines, 1):
-            # Calculate duration based on content
-            word_count = len(line.split())
-            is_last = (i == len(lines))
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Remove any numeric prefixes (like "1.")
+            line = re.sub(r'^\d+\.\s*', '', line)
+            sentences.append(line)
+        
+        # Write SRT file directly from the original lines
+        with open(subtitles_path, "w", encoding="utf-8-sig") as f:
+            current_time = 0
             
-            if is_last:
-                duration = avg_duration + 2.5
-            else:
-                # Start subtitles slightly earlier
-                duration = min(max(word_count * 0.4, 2.5), avg_duration * 1.2)
+            for i, sentence in enumerate(sentences):
+                # Calculate word count for timing
+                word_count = len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)])
+                
+                # Calculate duration - shorter for better pacing
+                est_duration = max(1.3, min(2.8, word_count * 0.3))
+                
+                # Ensure we don't exceed audio duration
+                if current_time + est_duration > total_duration:
+                    est_duration = total_duration - current_time
+                
+                if est_duration <= 0:
+                    break
+                
+                # Write SRT entry
+                start_time = format_time(current_time)
+                end_time = format_time(current_time + est_duration)
+                
+                f.write(f"{i+1}\n")
+                f.write(f"{start_time} --> {end_time}\n")
+                f.write(f"{sentence}\n\n")
+                
+                # Gap between subtitles
+                current_time += est_duration + 0.15
             
-            # Start each subtitle 0.2s earlier for better sync
-            start_time = max(0, current_time - 0.2)
-            end_time = start_time + duration
-            
-            # Format for SRT
-            start_str = f"{int(start_time//3600):02d}:{int((start_time%3600)//60):02d}:{start_time%60:06.3f}".replace('.', ',')
-            end_str = f"{int(end_time//3600):02d}:{int((end_time%3600)//60):02d}:{end_time%60:06.3f}".replace('.', ',')
-            
-            srt_block = f"{i}\n{start_str} --> {end_str}\n{line}\n\n"
-            srt_blocks.append(srt_block)
-            
-            current_time = end_time + 0.1
-        
-        # Write SRT file
-        subtitles_path = "temp/subtitles/latest.srt"
-        os.makedirs(os.path.dirname(subtitles_path), exist_ok=True)
-        
-        # Write with UTF-8 encoding and BOM
-        with open(subtitles_path, 'w', encoding='utf-8-sig') as f:
-            f.write(''.join(srt_blocks))
-        
+        print(colored(f"Generated {len(sentences)} subtitles", "green"))
         return subtitles_path
-        
+    
     except Exception as e:
         print(colored(f"Error generating subtitles: {str(e)}", "red"))
         return None
 
 def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
-    """
-    Combine videos by clipping segments from each video to match audio timing.
+    """Combine multiple videos together to match the audio duration.
     Each video will contribute a portion to the final video.
     """
     try:
@@ -124,18 +137,15 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
         
         print(colored("\n=== Video Combination Debug Info ===", "blue"))
         print(colored(f"Audio duration: {total_duration:.2f}s", "cyan"))
+        print(colored(f"Target duration: {target_duration:.2f}s", "cyan"))
         print(colored(f"Number of videos: {len(video_paths)}", "cyan"))
-        print(colored(f"Video paths type: {type(video_paths)}", "cyan"))
-        print(colored(f"Video paths content: {video_paths}", "cyan"))
         
-        # Calculate segment duration for each video
+        # Calculate how long each video should be
         num_videos = len(video_paths)
         segment_duration = total_duration / num_videos
-        
-        print(colored("\n=== Segment Calculations ===", "blue"))
         print(colored(f"Segment duration per video: {segment_duration:.2f}s", "cyan"))
         
-        # Track our position in the timeline
+        # Keep track of current position in the timeline
         current_time = 0
         
         for i, video_data in enumerate(video_paths):
@@ -143,37 +153,44 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                 print(colored(f"\n=== Processing Video {i+1}/{num_videos} ===", "blue"))
                 print(colored(f"Video data: {video_data}", "cyan"))
                 
-                # Extract path from video_data dictionary
-                video_path = video_data['path'] if isinstance(video_data, dict) else video_data
+                # Get path
+                video_path = video_data.get('path', video_data)
+                
                 print(colored(f"Video path: {video_path}", "cyan"))
                 
                 # Load video
                 video = VideoFileClip(video_path)
-                print(colored(f"Original video duration: {video.duration:.2f}s", "cyan"))
-                print(colored(f"Original video size: {video.size}", "cyan"))
+                print(colored(f"Video duration: {video.duration:.2f}s", "cyan"))
                 
-                # Calculate this segment's duration
-                if i == num_videos - 1:
-                    this_segment_duration = total_duration - current_time
+                # Calculate how much of this video to use
+                this_segment_duration = min(segment_duration, total_duration - current_time)
+                if this_segment_duration <= 0:
+                    print(colored("Skipping video (no time left)", "yellow"))
+                    continue
+                
+                # Determine which portion to use
+                video_duration = video.duration
+                
+                # Avoid the first 10% and last 10% of the video for better segments
+                usable_start = video_duration * 0.1
+                usable_end = video_duration * 0.9
+                usable_duration = usable_end - usable_start
+                
+                # If the usable portion is too short, use the whole video
+                if usable_duration < this_segment_duration:
+                    usable_start = 0
+                    usable_end = video_duration
+                    usable_duration = video_duration
+                
+                # Choose a random starting point within the usable portion
+                # But ensure we have enough video left from that point
+                latest_possible_start = usable_end - this_segment_duration
+                if latest_possible_start < usable_start:
+                    video_start = usable_start
                 else:
-                    this_segment_duration = segment_duration
+                    video_start = random.uniform(usable_start, latest_possible_start)
                 
-                print(colored(f"Target segment duration: {this_segment_duration:.2f}s", "cyan"))
-                
-                # Select portion of video to use
-                if video.duration > this_segment_duration:
-                    max_start = video.duration - this_segment_duration
-                    video_start = random.uniform(0, max_start)
-                    print(colored(f"Video longer than needed:", "yellow"))
-                    print(colored(f"- Max start time: {max_start:.2f}s", "yellow"))
-                    print(colored(f"- Selected start: {video_start:.2f}s", "yellow"))
-                    print(colored(f"- Will use: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s", "yellow"))
-                else:
-                    video_start = 0
-                    print(colored(f"Video shorter than needed - will loop", "yellow"))
-                    print(colored(f"- Original duration: {video.duration:.2f}s", "yellow"))
-                    print(colored(f"- Need duration: {this_segment_duration:.2f}s", "yellow"))
-                    video = vfx.loop(video, duration=this_segment_duration)
+                print(colored(f"Using segment: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s", "cyan"))
                 
                 # Create clip
                 print(colored("\nCreating clip...", "blue"))
@@ -182,15 +199,14 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                        .resize(width=1080)
                        .set_position(("center", "center")))
                 
-                print(colored(f"Created clip duration: {clip.duration:.2f}s", "green"))
-                
-                # Add transition effects
+                # Handle transition effects
                 if i > 0:
-                    print(colored("Adding entrance crossfade", "cyan"))
-                    clip = clip.crossfadein(0.3)
+                    print(colored("Adding crossfade...", "cyan"))
+                    clip = clip.crossfadein(0.5)
+                
                 if i < num_videos - 1:
-                    print(colored("Adding exit crossfade", "cyan"))
-                    clip = clip.crossfadeout(0.3)
+                    print(colored("Adding crossfade out...", "cyan"))
+                    clip = clip.crossfadeout(0.5)
                 
                 clips.append(clip)
                 current_time += this_segment_duration
@@ -206,15 +222,17 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
         
         print(colored("\n=== Finalizing Video ===", "blue"))
         print(colored(f"Number of clips to combine: {len(clips)}", "cyan"))
+        
+        # Combine all clips
         final_clip = concatenate_videoclips(clips, method="compose")
-        
         print(colored(f"Final clip duration: {final_clip.duration:.2f}s", "cyan"))
-        print(colored(f"Target duration: {total_duration:.2f}s", "cyan"))
         
+        # Ensure exact duration match
         if abs(final_clip.duration - total_duration) > 0.1:
             print(colored(f"Duration mismatch of {abs(final_clip.duration - total_duration):.2f}s - adjusting...", "yellow"))
             final_clip = final_clip.set_duration(total_duration)
         
+        # Save combined video
         output_path = "temp_combined.mp4"
         print(colored(f"\nSaving to: {output_path}", "blue"))
         
@@ -480,100 +498,149 @@ def create_fallback_emoji(size=120, emoji_char=None):
     
     return img
 
-def create_text_with_emoji(txt, size=(1000, 800)):
+def create_text_with_emoji(txt, size=(1080, 800)):
     """Create text with colored emojis using Pillow"""
     try:
-        # Create a transparent background - make it wider for better Shorts fit
+        # Create a transparent background for Shorts
         image = Image.new('RGBA', (1080, 800), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
         
-        # Split text and emojis
-        words = []
-        current_word = ""
+        # First split into sentences to preserve order
+        sentences = txt.split('. ')
+        formatted_lines = []
         
-        for char in txt:
-            if emoji.is_emoji(char):
-                if current_word:
-                    words.append(("text", current_word.strip()))
-                    current_word = ""
-                words.append(("emoji", char))
-            else:
-                current_word += char
-        if current_word:
-            words.append(("text", current_word.strip()))
-
-        # Load font for text - larger for better visibility on mobile
+        for sentence in sentences:
+            # Process each sentence
+            words = []
+            fragments = sentence.split()
+            
+            # Process each word, keeping emojis separate
+            for fragment in fragments:
+                emoji_parts = []
+                text_parts = []
+                current_text = ""
+                
+                # Find emojis in this fragment
+                for char in fragment:
+                    if emoji.is_emoji(char):
+                        if current_text:
+                            text_parts.append(current_text)
+                            current_text = ""
+                        emoji_parts.append(char)
+                    else:
+                        current_text += char
+                
+                if current_text:
+                    text_parts.append(current_text)
+                
+                # Add text first, then emojis (to maintain order)
+                if text_parts:
+                    words.append(("text", " ".join(text_parts)))
+                for emoji_char in emoji_parts:
+                    words.append(("emoji", emoji_char))
+            
+            # Add this processed sentence
+            if words:
+                formatted_lines.append(words)
+        
+        # Load font - slightly smaller for better fitting
         try:
-            text_font = ImageFont.truetype('arial.ttf', 110)  # Larger font for mobile
+            text_font = ImageFont.truetype('arial.ttf', 95)
         except:
             text_font = ImageFont.load_default()
-
-        # Calculate lines with proper word wrapping - narrower for vertical format
-        lines = []
-        current_line = []
-        current_width = 0
-        max_width = 900  # Narrower width for better Shorts format
-
-        for word_type, word in words:
-            if word_type == "text":
-                word_bbox = draw.textbbox((0, 0), word + " ", font=text_font)
-                word_width = word_bbox[2] - word_bbox[0]
-            else:  # emoji
-                word_width = 130  # Larger emoji size for visibility
-            
-            if current_width + word_width <= max_width:
-                current_line.append((word_type, word))
-                current_width += word_width + 10
-            else:
-                lines.append(current_line)
-                current_line = [(word_type, word)]
-                current_width = word_width
         
-        if current_line:
-            lines.append(current_line)
-
-        # Calculate total height with more line spacing for readability
-        line_height = max(text_font.size, 130) + 30  # More spacing between lines
-        total_height = len(lines) * line_height
+        # Compute wrapped lines with proper word breaks
+        final_lines = []
+        max_width = 850  # Narrow width to ensure wrapping
+        
+        for sentence_parts in formatted_lines:
+            current_line = []
+            current_width = 0
+            
+            for part_type, content in sentence_parts:
+                width_to_add = 0
+                if part_type == "text":
+                    # Split long text if needed
+                    words = content.split()
+                    if len(words) > 1:
+                        for word in words:
+                            word_bbox = draw.textbbox((0, 0), word + " ", font=text_font)
+                            word_width = word_bbox[2] - word_bbox[0]
+                            
+                            if current_width + word_width > max_width and current_line:
+                                final_lines.append(current_line)
+                                current_line = [("text", word)]
+                                current_width = word_width
+                            else:
+                                current_line.append(("text", word))
+                                current_width += word_width + 10
+                    else:
+                        word_bbox = draw.textbbox((0, 0), content + " ", font=text_font)
+                        word_width = word_bbox[2] - word_bbox[0]
+                        
+                        if current_width + word_width > max_width and current_line:
+                            final_lines.append(current_line)
+                            current_line = [("text", content)]
+                            current_width = word_width
+                        else:
+                            current_line.append(("text", content))
+                            current_width += word_width + 10
+                else:  # Emoji
+                    emoji_width = 130
+                    if current_width + emoji_width > max_width and current_line:
+                        final_lines.append(current_line)
+                        current_line = [("emoji", content)]
+                        current_width = emoji_width
+                    else:
+                        current_line.append(("emoji", content))
+                        current_width += emoji_width + 10
+            
+            if current_line:
+                final_lines.append(current_line)
+        
+        # Calculate total height for all wrapped lines
+        line_height = max(text_font.size, 130) + 30
+        total_height = len(final_lines) * line_height
         y = (image.height - total_height) // 2
-
+        
         # Draw each line
-        for line in lines:
-            line_width = sum(130 if t == "emoji" else draw.textbbox((0, 0), w + " ", font=text_font)[2] 
-                           for t, w in line)
-            x = (image.width - line_width) // 2  # Center in frame
-
-            for word_type, word in line:
-                if word_type == "text":
+        for line in final_lines:
+            # Calculate line width for centering
+            line_width = 0
+            for part_type, content in line:
+                if part_type == "text":
+                    bbox = draw.textbbox((0, 0), content + " ", font=text_font)
+                    line_width += bbox[2] - bbox[0]
+                else:  # emoji
+                    line_width += 130 + 10
+            
+            # Center this line
+            x = (image.width - line_width) // 2
+            
+            # Draw each part
+            for part_type, content in line:
+                if part_type == "text":
                     # Draw text with stroke
-                    stroke_width = 6  # Thicker stroke for mobile visibility
+                    stroke_width = 6
                     for adj in range(-stroke_width, stroke_width+1):
                         for adj2 in range(-stroke_width, stroke_width+1):
-                            draw.text((x+adj, y+adj2), word, font=text_font, fill=(0, 0, 0, 255))
-                    draw.text((x, y), word, font=text_font, fill=(255, 255, 255, 255))
-                    bbox = draw.textbbox((0, 0), word + " ", font=text_font)
-                    x += bbox[2] - bbox[0] + 15  # More spacing between words
+                            draw.text((x+adj, y+adj2), content, font=text_font, fill=(0, 0, 0, 255))
+                    
+                    draw.text((x, y), content, font=text_font, fill=(255, 255, 255, 255))
+                    bbox = draw.textbbox((0, 0), content + " ", font=text_font)
+                    x += bbox[2] - bbox[0] + 5
                 else:
-                    # Draw colored emoji
-                    emoji_img = get_emoji_image(word, size=130)  # Larger emoji
+                    # Draw emoji
+                    emoji_img = get_emoji_image(content, size=130)
                     if emoji_img:
-                        try:
-                            emoji_y = y + (text_font.size - 130) // 2
-                            # Use simplified pasting that works better
-                            image.paste(emoji_img, (x, emoji_y), emoji_img)
-                        except Exception as e:
-                            print(colored(f"Error pasting emoji: {str(e)}", "yellow"))
-                            # Alternative paste method
-                            draw.rectangle(
-                                [(x, emoji_y), (x+130, emoji_y+130)],
-                                fill=(255, 200, 0, 255)
-                            )
-                    x += 130 + 15  # Larger emoji size + more spacing
-
+                        emoji_y = y + (text_font.size - 130) // 2
+                        image.paste(emoji_img, (x, emoji_y), emoji_img)
+                    x += 130 + 10
+            
             y += line_height
-
-        return image
         
+        return image
+    
     except Exception as e:
         print(colored(f"Error creating text with emoji: {str(e)}", "red"))
         return None
@@ -584,13 +651,13 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         if not txt:
             return None
             
-        # Clean text while preserving emojis
+        # Clean text
         clean_txt = txt if isinstance(txt, str) else str(txt)
         clean_txt = clean_txt.strip().strip('"')
         if not clean_txt:
             return None
         
-        # Create image with text and emojis - optimized for Shorts
+        # Create image with text and emojis
         text_image = create_text_with_emoji(clean_txt)
         if text_image is None:
             return None
@@ -598,23 +665,25 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         # Convert PIL image to MoviePy clip
         txt_clip = ImageClip(np.array(text_image))
         
-        # Set duration based on whether it's the last subtitle
+        # Set duration based on content length
         if is_last and total_duration is not None:
-            duration = total_duration + 1.5
+            duration = max(1.5, total_duration)
         else:
-            duration = 3.2  # Standard duration for most subtitles
+            # Calculate duration based on word count
+            word_count = len(clean_txt.split())
+            duration = max(1.8, min(4.0, word_count * 0.35))
         
-        # Add effects
+        # Add effects with smoother crossfades
         final_clip = (txt_clip
             .set_duration(duration)
             .set_position(('center', 'center'))
-            .crossfadein(0.2))
+            .crossfadein(0.2))  # Slightly longer fade in
         
         # Add fade out based on position
         if is_last:
-            final_clip = final_clip.crossfadeout(0.8)
+            final_clip = final_clip.crossfadeout(0.5)
         else:
-            final_clip = final_clip.crossfadeout(0.35)
+            final_clip = final_clip.crossfadeout(0.3)  # Longer fade out for better transitions
         
         return final_clip
         
@@ -623,64 +692,90 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         print(colored(f"Text content: {txt}", "yellow"))
         return None
 
-def process_subtitles(subtitles_path, video):
-    """Process subtitles using pysrt"""
+def process_subtitles(subs_path, base_video):
+    """Process subtitles and add them to video with efficient rendering"""
     try:
         print(colored("\n=== Processing Subtitles ===", "blue"))
         
-        # Read subtitles with pysrt
-        subs = pysrt.open(subtitles_path, encoding='utf-8-sig')
-        subtitle_clips = []
+        # Load subtitles - validate they're proper SRT format
+        try:
+            subs = pysrt.open(subs_path)
+            # Filter out any overly long subtitles that might be errors
+            subs = [sub for sub in subs if len(sub.text) < 200]  # Skip any suspiciously long subtitle
+            print(colored(f"Found {len(subs)} subtitles", "green"))
+        except Exception as e:
+            print(colored(f"Error loading subtitles: {str(e)}", "red"))
+            return base_video
         
-        print(colored(f"Found {len(subs)} subtitles", "cyan"))
+        # Pre-render all subtitle images first (for speed)
+        subtitle_data = []
         
         for i, sub in enumerate(subs):
-            try:
-                # Convert timecode to seconds
-                start_time = sub.start.seconds + sub.start.milliseconds/1000.0
-                end_time = sub.end.seconds + sub.end.milliseconds/1000.0
-                duration = end_time - start_time
+            # Clean subtitle text
+            text = sub.text.replace('\n', ' ').strip().strip('"')
+            if not text:
+                continue
                 
-                # Get text content directly
-                text = sub.text.strip()
-                
-                clip = create_subtitle_bg(
-                    txt=text,  # Pass text directly
-                    is_last=(i == len(subs) - 1),
-                    total_duration=duration
-                )
-                
-                if clip:
-                    clip = clip.set_start(start_time)
-                    subtitle_clips.append(clip)
-                    print(colored(f"Created subtitle: {text}", "cyan"))
-                    
-            except Exception as e:
-                print(colored(f"Error processing subtitle {i+1}: {str(e)}", "red"))
-                print(colored(traceback.format_exc(), "red"))
-        
-        if subtitle_clips:
-            # Combine all subtitle clips
-            subtitles = CompositeVideoClip(
-                subtitle_clips,
-                size=video.size
-            ).set_duration(video.duration)
+            # Skip duplicate/combined subtitles (longer than 100 chars)
+            if len(text) > 100:
+                print(colored(f"Skipping long subtitle: {text[:30]}...", "yellow"))
+                continue
             
-            # Add subtitles to video
-            final_video = CompositeVideoClip([
-                video,
-                subtitles
-            ])
+            # Calculate timing
+            start_time = sub.start.ordinal / 1000.0
+            end_time = sub.end.ordinal / 1000.0
             
-            print(colored("✓ Subtitles added successfully", "green"))
-            return final_video
+            # Create text image
+            text_image = create_text_with_emoji(text)
+            if text_image is None:
+                continue
+                
+            # Store the pre-rendered image
+            subtitle_data.append({
+                'text': text,
+                'image': text_image,
+                'start': start_time,
+                'end': end_time
+            })
+            
+            print(colored(f"Prepared subtitle: {text}", "green"))
         
-        return video
+        # Fast track: If no subtitles, return base video
+        if not subtitle_data:
+            return base_video
         
+        # Optimize for speed: Generate one composite clip per subtitle
+        clips = [base_video]
+        
+        for data in subtitle_data:
+            # Convert PIL image to MoviePy clip
+            img_array = np.array(data['image'])
+            duration = data['end'] - data['start']
+            
+            # Create clip with minimal processing
+            sub_clip = (ImageClip(img_array)
+                .set_duration(duration)
+                .set_position(('center', 'center'))
+                .set_start(data['start'])
+            )
+            
+            # Simple fade effect
+            if duration > 0.5:
+                sub_clip = sub_clip.fadein(0.15).fadeout(0.15)
+            
+            clips.append(sub_clip)
+            
+        # Use efficient compositing
+        print(colored("✓ Rendering video with subtitles", "green"))
+        final_video = CompositeVideoClip(clips)
+        print(colored("✓ Subtitles added successfully", "green"))
+        
+        return final_video
+    
     except Exception as e:
         print(colored(f"Error processing subtitles: {str(e)}", "red"))
         print(colored(traceback.format_exc(), "red"))
-        return video
+        return base_video
 
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None):
     """Generate final video with audio and optional subtitles"""
