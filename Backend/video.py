@@ -17,7 +17,9 @@ from openai import OpenAI
 import codecs
 
 # Configure MoviePy to use ImageMagick
-if os.getenv('IMAGEMAGICK_BINARY'):
+if os.path.exists('tools/imagemagick/magick.exe'):
+    change_settings({"IMAGEMAGICK_BINARY": os.path.abspath('tools/imagemagick/magick.exe')})
+elif os.getenv('IMAGEMAGICK_BINARY'):
     change_settings({"IMAGEMAGICK_BINARY": os.getenv('IMAGEMAGICK_BINARY')})
 
 def save_video(video_url: str, directory: str) -> str:
@@ -395,7 +397,7 @@ def resize_to_vertical(clip):
         return None
 
 def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
-    """Create simple centered subtitles with emoji support"""
+    """Create simple centered subtitles with emoji support using ImageMagick"""
     try:
         if not txt:
             return None
@@ -411,9 +413,9 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
             fade_out = 0
         else:
             duration = 3.0
-            fade_out = 0.3
+            fade_out = 0.5
         
-        # Create text clip with emoji support
+        # Create text clip with ImageMagick
         txt_clip = TextClip(
             txt=clean_txt,
             font='Arial',
@@ -421,18 +423,19 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
             color='white',
             stroke_color='black',
             stroke_width=4,
-            method='caption',
-            size=(1080, None),  # Full width
-            align='center'
-        )
+            method='label',  # Use ImageMagick's label method
+            size=(900, None),
+            align='center',
+            transparent=True  # Make background transparent
+        ).set_position('center', 'center')
         
         # Set duration and effects
         txt_clip = txt_clip.set_duration(duration)
+        txt_clip = txt_clip.crossfadein(0.3)
         if not is_last:
             txt_clip = txt_clip.crossfadeout(fade_out)
         
-        # Position at center
-        return txt_clip.set_position('center')
+        return txt_clip
         
     except Exception as e:
         print(colored(f"Subtitle error: {str(e)} for text: {txt}", "red"))
@@ -543,101 +546,47 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         # Add subtitles if provided
         if subtitles_path and os.path.exists(subtitles_path):
             print(colored("\n=== Processing Subtitles ===", "blue"))
-            
-            # Define styles with RGB tuples for colors
-            styles = {
-                'tech_humor': {
-                    'font': 'Arial-Unicode-MS' if os.name == 'nt' else 'DejaVu-Sans',
-                    'fontsize': 80,
-                    'color': 'white',
-                    'stroke_color': 'black',
-                    'stroke_width': 4,
-                    'size': (1000, 100),
-                    'bg_opacity': 0.6,
-                    'line_spacing': 8,
-                    'align': 'center',
-                    'method': 'label'  # Changed to 'label' for better emoji support
-                },
-                'default': {
-                    'font': 'Arial-Unicode-MS' if os.name == 'nt' else 'DejaVu-Sans',
-                    'fontsize': 80,
-                    'color': 'white',
-                    'stroke_color': 'black',
-                    'stroke_width': 4,
-                    'size': (1000, None),
-                    'bg_opacity': 0.6,
-                    'line_spacing': 8,
-                    'align': 'center',
-                    'method': 'label'
-                }
-            }
-            
-            # Get style based on content type
-            style = styles.get(content_type, styles['default'])
-            print(colored(f"Using style for: {content_type}", "cyan"))
-            
-            # Create subtitles
             try:
-                # Read subtitles with custom reader
-                subtitle_data = read_subtitles_file(subtitles_path)
+                # Read subtitles directly with proper encoding
+                with open(subtitles_path, 'r', encoding='utf-8-sig') as f:
+                    subtitle_data = []
+                    current_times = None
+                    current_text = ""
+                    
+                    for line in f.readlines():
+                        line = line.strip()
+                        if '-->' in line:
+                            start, end = line.split('-->')
+                            start = start.strip().replace(',', '.')
+                            end = end.strip().replace(',', '.')
+                            current_times = [float(start.split(':')[2]), float(end.split(':')[2])]
+                        elif line and not line.isdigit():
+                            current_text = line
+                            if current_times:
+                                subtitle_data.append((current_times, current_text))
+                                current_times = None
                 
-                if not subtitle_data:
-                    raise ValueError("No subtitles found in file")
-                
-                # Get the last subtitle text
-                last_subtitle = subtitle_data[-1][1] if subtitle_data else ""
-                print(colored(f"Found {len(subtitle_data)} subtitles", "cyan"))
-                print(colored(f"Last subtitle: {last_subtitle}", "cyan"))
-                
-                # Create generator function
-                def create_subtitle_clip(txt):
-                    return create_subtitle_bg(
-                        txt=txt,
-                        style=style,
-                        is_last=(txt.strip() == last_subtitle.strip()),
-                        total_duration=total_duration
+                # Create subtitle clips
+                subtitle_clips = []
+                for (start, end), text in subtitle_data:
+                    clip = create_subtitle_bg(
+                        txt=text,
+                        style=None,
+                        is_last=(text == subtitle_data[-1][1]),
+                        total_duration=end - start
                     )
+                    if clip:
+                        clip = clip.set_start(start).set_duration(end - start)
+                        subtitle_clips.append(clip)
                 
-                # Create subtitles clip using the parsed data
-                def make_frame(t):
-                    try:
-                        # Find the current subtitle
-                        current_subtitle = next(
-                            (text for ((start, end), text) in subtitle_data 
-                             if start <= t <= end),
-                            None
-                        )
-                        
-                        if current_subtitle:
-                            clip = create_subtitle_clip(current_subtitle)
-                            if clip:
-                                frame = clip.get_frame(t)
-                                # Convert RGBA to RGB if needed
-                                if frame.shape[-1] == 4:
-                                    # Use alpha channel to blend with black background
-                                    alpha = frame[..., 3:] / 255.0
-                                    rgb = frame[..., :3]
-                                    return (rgb * alpha).astype(np.uint8)
-                                return frame
-                        
-                        # Return black frame in RGB format
-                        return np.zeros((1920, 1080, 3), dtype=np.uint8)
-                        
-                    except Exception as e:
-                        print(colored(f"Frame error at {t}: {str(e)}", "red"))
-                        return np.zeros((1920, 1080, 3), dtype=np.uint8)
-                
-                # Create the subtitle clip
-                subtitles = VideoClip(make_frame)
-                subtitles = subtitles.set_duration(total_duration)
-                
-                # Add subtitles to video
-                video = CompositeVideoClip(
-                    [video, subtitles],
-                    size=(1080, 1920)
-                ).set_duration(total_duration)
-                
-                print(colored("✓ Subtitles added to video", "green"))
+                # Combine all subtitle clips
+                if subtitle_clips:
+                    subtitles = CompositeVideoClip(subtitle_clips)
+                    video = CompositeVideoClip(
+                        [video, subtitles],
+                        size=(1080, 1920)
+                    )
+                    print(colored("✓ Subtitles added to video", "green"))
                 
             except Exception as e:
                 print(colored(f"Error adding subtitles: {str(e)}", "red"))
