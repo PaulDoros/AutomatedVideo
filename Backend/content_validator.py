@@ -219,6 +219,17 @@ class ScriptGenerator:
             # Get channel-specific prompt
             content_prompt = self.get_channel_prompt(channel_type, topic)
             
+            # Add request for thumbnail title in a separate field
+            content_prompt += """
+            
+            AFTER you've completed the script, please also include a separate catchy thumbnail title.
+            Place it at the very end after a blank line and prefix it with "THUMBNAIL_TITLE:" 
+            The thumbnail title should:
+            - Be attention-grabbing (5-7 words max)
+            - Include 1-2 relevant emoji
+            - NOT be part of the script itself
+            """
+            
             response = self.client.chat.completions.create(
                 model=self.models['primary'],
                 messages=[
@@ -237,7 +248,18 @@ class ScriptGenerator:
             print(colored(f"\nAPI Cost: ${cost:.4f}", "yellow"))
             print(colored(f"Total Cost: ${self.total_cost:.4f}", "yellow"))
             
-            script = response.choices[0].message.content.strip()
+            full_response = response.choices[0].message.content.strip()
+            
+            # Extract the script and thumbnail title separately
+            script = full_response
+            thumbnail_title = ""
+            
+            # Check for thumbnail title marker - should be at the end
+            if "THUMBNAIL_TITLE:" in full_response:
+                parts = full_response.split("THUMBNAIL_TITLE:")
+                script = parts[0].strip()
+                thumbnail_title = parts[1].strip()
+                print(colored(f"\nExtracted Thumbnail Title: {thumbnail_title}", "green"))
             
             # Validate script
             validator = ContentValidator()
@@ -247,6 +269,11 @@ class ScriptGenerator:
                 print(colored("\nGenerated Script:", "green"))
                 print(colored(script, "cyan"))
                 print(colored(f"\nEstimated Duration: {analysis.get('estimated_duration', 0):.1f}s", "blue"))
+                
+                # Save script and thumbnail title separately
+                self._save_script(script, thumbnail_title, channel_type, is_valid, analysis)
+                
+                # Return ONLY the script for processing
                 return True, script
             
             # If primary model fails, try fallback
@@ -272,6 +299,35 @@ class ScriptGenerator:
         except Exception as e:
             print(colored(f"Error generating script: {str(e)}", "red"))
             return False, None
+
+    def _save_script(self, script: str, thumbnail_title: str, channel_type: str, is_valid: bool, analysis: dict):
+        """Save script to cache with thumbnail title"""
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs("cache/scripts", exist_ok=True)
+            
+            # Generate a preview
+            preview = script.split("\n")[0] if "\n" in script else script[:50] + "..."
+            
+            # Save to JSON file
+            script_data = {
+                "script": script,
+                "thumbnail_title": thumbnail_title,
+                "preview": preview,
+                "is_valid": is_valid,
+                "metrics": {
+                    "estimated_duration": analysis.get("estimated_duration", 0),
+                    "word_count": len(script.split())
+                }
+            }
+            
+            with open(f"cache/scripts/{channel_type}_latest.json", "w") as f:
+                json.dump(script_data, f, indent=2)
+                
+            print(colored(f"✓ Script saved to cache/scripts/{channel_type}_latest.json", "green"))
+            
+        except Exception as e:
+            print(colored(f"Error saving script: {str(e)}", "red"))
 
     def track_usage(self, script, is_premium):
         """Track token usage and estimated costs"""

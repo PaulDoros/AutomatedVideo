@@ -15,7 +15,7 @@ from moviepy.config import change_settings
 from openai import OpenAI
 import codecs
 import json
-from PIL import Image, ImageFont, ImageDraw
+from PIL import Image, ImageFont, ImageDraw, ImageEnhance
 from datetime import datetime
 import html
 import traceback
@@ -25,6 +25,7 @@ from moviepy.video.VideoClip import ImageClip
 from emoji_data_python import emoji_data
 from io import BytesIO
 import re
+import math
 
 # First activate your virtual environment and install pysrt:
 # python -m pip install pysrt --no-cache-dir
@@ -125,15 +126,12 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         return None
 
 def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
-    """Combine multiple videos together to match the audio duration.
-    Each video will contribute a portion to the final video.
-    """
+    """Combine multiple videos with smooth transitions for YouTube Shorts"""
     try:
         clips = []
         
-        # Get audio clip to analyze timing
-        audio_clip = AudioFileClip("temp/tts/tech_humor_latest.mp3")
-        total_duration = audio_clip.duration
+        # Calculate total target duration
+        total_duration = audio_duration if audio_duration else target_duration
         
         print(colored("\n=== Video Combination Debug Info ===", "blue"))
         print(colored(f"Audio duration: {total_duration:.2f}s", "cyan"))
@@ -151,10 +149,12 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
         for i, video_data in enumerate(video_paths):
             try:
                 print(colored(f"\n=== Processing Video {i+1}/{num_videos} ===", "blue"))
-                print(colored(f"Video data: {video_data}", "cyan"))
                 
-                # Get path
-                video_path = video_data.get('path', video_data)
+                # Get path (handle both dict and string formats)
+                if isinstance(video_data, dict):
+                    video_path = video_data.get('path')
+                else:
+                    video_path = video_data
                 
                 print(colored(f"Video path: {video_path}", "cyan"))
                 
@@ -182,31 +182,59 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                     usable_end = video_duration
                     usable_duration = video_duration
                 
-                # Choose a random starting point within the usable portion
-                # But ensure we have enough video left from that point
+                # Choose a starting point
                 latest_possible_start = usable_end - this_segment_duration
                 if latest_possible_start < usable_start:
                     video_start = usable_start
                 else:
-                    video_start = random.uniform(usable_start, latest_possible_start)
+                    # Use 25% through the usable portion for more interesting content
+                    video_start = usable_start + (usable_duration * 0.25)
+                    if video_start > latest_possible_start:
+                        video_start = usable_start
                 
                 print(colored(f"Using segment: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s", "cyan"))
                 
-                # Create clip
-                print(colored("\nCreating clip...", "blue"))
-                clip = (video
-                       .subclip(video_start, video_start + this_segment_duration)
-                       .resize(width=1080)
-                       .set_position(("center", "center")))
+                # Create clip - FIX: Use explicit values instead of lambda functions
+                clip = video.subclip(video_start, video_start + this_segment_duration)
                 
-                # Handle transition effects
+                # Resize to maintain height
+                clip = clip.resize(height=1920)
+                
+                # Fix the crop to use explicit values instead of lambda functions
+                if clip.w > 1080:
+                    x_center = clip.w / 2
+                    x1 = int(x_center - 540)  # 540 is half of 1080
+                    x2 = int(x_center + 540)
+                    clip = clip.crop(x1=x1, y1=0, x2=x2, y2=1920)
+                
+                # If video is too narrow, zoom to fill width
+                if clip.w < 1080:
+                    scale_factor = 1080 / clip.w
+                    clip = clip.resize(width=1080)
+                    # If this made it too tall, crop height
+                    if clip.h > 1920:
+                        y_center = clip.h / 2
+                        y1 = int(y_center - 960)  # 960 is half of 1920
+                        y2 = int(y_center + 960)
+                        clip = clip.crop(x1=0, y1=y1, x2=1080, y2=y2)
+                
+                # Apply subtle zoom effect (simple version without lambda)
+                if i % 2 == 0:  # Alternate between zoom in and out
+                    # For zoom effects, we'll use a simpler approach
+                    clip = clip.resize(1.02)  # Just a static 2% zoom
+                else:
+                    clip = clip.resize(1.03)  # 3% zoom
+                
+                # Handle modern transitions
                 if i > 0:
-                    print(colored("Adding crossfade...", "cyan"))
-                    clip = clip.crossfadein(0.5)
+                    print(colored("Adding smooth transition...", "cyan"))
+                    clip = clip.crossfadein(0.6)
                 
                 if i < num_videos - 1:
-                    print(colored("Adding crossfade out...", "cyan"))
-                    clip = clip.crossfadeout(0.5)
+                    clip = clip.crossfadeout(0.6)
+                
+                # Apply very subtle brightness adjustment
+                clip = clip.fx(vfx.colorx, 1.05)  # Simpler than using enhancer
                 
                 clips.append(clip)
                 current_time += this_segment_duration
@@ -215,9 +243,45 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
             except Exception as e:
                 print(colored(f"Error processing video {i+1}:", "red"))
                 print(colored(f"Error details: {str(e)}", "red"))
-                print(colored("Creating fallback black clip", "yellow"))
-                color_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
-                clips.append(color_clip)
+                print(colored("Creating fallback styled clip", "yellow"))
+                
+                # Create a styled fallback clip instead of plain black
+                try:
+                    # Create styled background using thumbnail generator principles
+                    from thumbnail_generator import ThumbnailGenerator
+                    thumbnail_gen = ThumbnailGenerator()
+                    
+                    # Generate appropriate background based on segment index
+                    colors = [
+                        ['#3a1c71', '#d76d77'],  # Purple gradient
+                        ['#4e54c8', '#8f94fb'],  # Blue gradient
+                        ['#11998e', '#38ef7d'],  # Green gradient
+                        ['#e1eec3', '#f05053'],  # Yellow-red gradient
+                        ['#355c7d', '#6c5b7b']   # Cool blue-purple gradient
+                    ]
+                    
+                    color_choice = i % len(colors)
+                    gradient = thumbnail_gen.create_gradient(colors[color_choice])
+                    
+                    # Convert to numpy array for MoviePy
+                    gradient_array = np.array(gradient)
+                    
+                    # Create a nicer fallback clip with gradient
+                    fallback_clip = ImageClip(gradient_array, duration=this_segment_duration)
+                    fallback_clip = fallback_clip.resize((1080, 1920))
+                    
+                    # Add a subtle text label
+                    txt_clip = TextClip("Next tip...", fontsize=70, color='white', 
+                                       font='Arial-Bold', stroke_color='black', stroke_width=2)
+                    txt_clip = txt_clip.set_position(('center', 'center')).set_duration(this_segment_duration)
+                    
+                    fallback_clip = CompositeVideoClip([fallback_clip, txt_clip])
+                    
+                except Exception:
+                    # If styled clip fails, use simple color clip
+                    fallback_clip = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=this_segment_duration)
+                
+                clips.append(fallback_clip)
                 current_time += this_segment_duration
         
         print(colored("\n=== Finalizing Video ===", "blue"))
@@ -246,7 +310,6 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
         
         # Clean up
         print(colored("\nCleaning up resources...", "blue"))
-        audio_clip.close()
         for clip in clips:
             clip.close()
         final_clip.close()
@@ -692,8 +755,90 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         print(colored(f"Text content: {txt}", "yellow"))
         return None
 
+def trim_audio_file(audio_path, trim_end=0.15):
+    """Trim and clean audio file for professional sound"""
+    try:
+        # Load audio
+        audio = AudioFileClip(audio_path)
+        
+        # Apply trimming and audio processing
+        if audio.duration > trim_end + 0.5:
+            # Trim end and slightly fade out
+            trimmed_audio = audio.subclip(0, audio.duration - trim_end)
+            # Add subtle fadeout to prevent abrupt ending
+            trimmed_audio = trimmed_audio.audio_fadeout(0.15)
+            
+            # Save to a new output path
+            output_dir = os.path.dirname(audio_path)
+            base_name = os.path.basename(audio_path)
+            name_parts = os.path.splitext(base_name)
+            output_path = os.path.join(output_dir, f"{name_parts[0]}_clean{name_parts[1]}")
+            
+            # Write to new file with high quality
+            trimmed_audio.write_audiofile(
+                output_path, 
+                codec='mp3', 
+                fps=44100, 
+                bitrate="192k"  # Higher bitrate for better quality
+            )
+            print(colored(f"✓ Enhanced audio quality and trimmed {trim_end}s", "green"))
+            
+            # Clean up
+            audio.close()
+            trimmed_audio.close()
+            
+            return output_path
+        
+        return audio_path
+        
+    except Exception as e:
+        print(colored(f"Error processing audio: {str(e)}", "yellow"))
+        return audio_path
+
+def enhance_tts_prompt(script, content_type):
+    """Create an enhanced prompt for TTS based on content type"""
+    
+    base_prompt = ""
+    
+    if content_type == "tech_humor":
+        base_prompt = "Speak in an enthusiastic tech presenter voice with good comedic timing. " \
+                      "Emphasize the punchlines and add subtle pauses before key jokes. " \
+                      "Sound like you're sharing an insider tech joke with the audience."
+    
+    elif content_type == "life_hack":
+        base_prompt = "Speak in a friendly, helpful tone like you're sharing a valuable secret. " \
+                      "Emphasize the transformative benefits of the hack with excitement. " \
+                      "Use a slightly faster pace for setup and slow down for the key instructions."
+    
+    elif content_type == "coding_tips":
+        base_prompt = "Speak like an experienced programmer sharing wisdom. " \
+                      "Use a confident, knowledgeable tone with strategic pauses to emphasize key points. " \
+                      "Sound slightly amused when mentioning common coding mistakes."
+    
+    elif content_type == "food_recipe":
+        base_prompt = "Speak in a warm, appetizing tone that makes the food sound delicious. " \
+                      "Use a moderately slow pace with emphasis on flavor descriptions. " \
+                      "Sound excited about the final result to build anticipation."
+    
+    else:  # Default for general content
+        base_prompt = "Speak in an engaging, naturally enthusiastic voice with good dynamic range. " \
+                      "Use appropriate pauses for emphasis and let the funny moments land naturally. " \
+                      "End with an upbeat call to action."
+    
+    # Add script-specific instructions based on emojis present
+    if "😂" in script or "🤣" in script:
+        base_prompt += " Include light chuckles at the funny parts."
+    
+    if "💡" in script:
+        base_prompt += " Sound genuinely impressed when revealing the key insight."
+    
+    if "👍" in script or "❤️" in script:
+        base_prompt += " End with an enthusiastic tone for the call to action."
+    
+    return base_prompt
+
 def process_subtitles(subs_path, base_video):
-    """Process subtitles and add them to video with efficient rendering"""
+    """Process subtitles with modern, subtle transitions"""
     try:
         print(colored("\n=== Processing Subtitles ===", "blue"))
         
@@ -707,7 +852,7 @@ def process_subtitles(subs_path, base_video):
             print(colored(f"Error loading subtitles: {str(e)}", "red"))
             return base_video
         
-        # Pre-render all subtitle images first (for speed)
+        # Pre-render all subtitle images with consistent styling
         subtitle_data = []
         
         for i, sub in enumerate(subs):
@@ -725,6 +870,19 @@ def process_subtitles(subs_path, base_video):
             start_time = sub.start.ordinal / 1000.0
             end_time = sub.end.ordinal / 1000.0
             
+            # Handle last subtitle - make it stay until end of video
+            is_last = (i == len(subs) - 1)
+            if is_last:
+                # Check if this has a call to action
+                has_call_to_action = any(x in text.lower() for x in [
+                    "like", "subscribe", "follow", "comment", "share", "hit", "smash"
+                ])
+                
+                if has_call_to_action:
+                    # Make it stay until end of video
+                    end_time = base_video.duration
+                    print(colored(f"✓ Extended final call-to-action until end of video", "green"))
+            
             # Create text image
             text_image = create_text_with_emoji(text)
             if text_image is None:
@@ -735,7 +893,9 @@ def process_subtitles(subs_path, base_video):
                 'text': text,
                 'image': text_image,
                 'start': start_time,
-                'end': end_time
+                'end': end_time,
+                'is_last': is_last,
+                'is_first': (i == 0)
             })
             
             print(colored(f"Prepared subtitle: {text}", "green"))
@@ -744,8 +904,8 @@ def process_subtitles(subs_path, base_video):
         if not subtitle_data:
             return base_video
         
-        # Optimize for speed: Generate one composite clip per subtitle
-        clips = [base_video]
+        # Create clips for each subtitle
+        subtitle_clips = []
         
         for data in subtitle_data:
             # Convert PIL image to MoviePy clip
@@ -756,20 +916,33 @@ def process_subtitles(subs_path, base_video):
             sub_clip = (ImageClip(img_array)
                 .set_duration(duration)
                 .set_position(('center', 'center'))
-                .set_start(data['start'])
-            )
+                .set_start(data['start']))
             
-            # Simple fade effect
-            if duration > 0.5:
-                sub_clip = sub_clip.fadein(0.15).fadeout(0.15)
+            # Apply effects based on position
+            if data['is_first']:
+                # First subtitle gets a subtle slide-up and fade in
+                # FIX: Use a simpler approach for the position
+                sub_clip = sub_clip.set_position(('center', 'center'))
+                sub_clip = sub_clip.fadein(0.4)
+            elif data['is_last']:
+                # Last subtitle gets a long, subtle fade in and no fade out
+                sub_clip = sub_clip.fadein(0.5)
+            else:
+                # Middle subtitles get subtle fade in/out
+                sub_clip = sub_clip.fadein(0.3).fadeout(0.3)
             
-            clips.append(sub_clip)
-            
-        # Use efficient compositing
-        print(colored("✓ Rendering video with subtitles", "green"))
-        final_video = CompositeVideoClip(clips)
-        print(colored("✓ Subtitles added successfully", "green"))
+            subtitle_clips.append(sub_clip)
         
+        # FIX: Use a simpler approach for dimming the background
+        # Create a semi-transparent overlay for the entire video
+        overlay = ColorClip(size=base_video.size, color=(0, 0, 0))
+        overlay = overlay.set_opacity(0.15)  # Very subtle darkening
+        overlay = overlay.set_duration(base_video.duration)
+        
+        # Create final video with subtitles
+        final_video = CompositeVideoClip([base_video, overlay] + subtitle_clips)
+        
+        print(colored("✓ Added subtitles with modern transitions", "green"))
         return final_video
     
     except Exception as e:
@@ -778,135 +951,129 @@ def process_subtitles(subs_path, base_video):
         return base_video
 
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None):
-    """Generate final video with audio and optional subtitles"""
+    """Generate video with background, audio and subtitles"""
     try:
-        # Load background clips
-        background_clips = []
-        if isinstance(background_path, (str, Path)):
-            paths = [background_path]
-        elif isinstance(background_path, (list, tuple)):
-            paths = background_path
-        else:
-            raise ValueError("Invalid background_path type")
-
-        # Load audio and get base duration
-        audio = AudioFileClip(audio_path)
-        base_duration = audio.duration - 0.1  # Trim slight silence
+        print(colored("\n=== Video Generation Started ===", "blue"))
         
-        # Create extended audio with silence for the extra duration
-        if subtitles_path and os.path.exists(subtitles_path):
-            # Create silence clip for extension
-            silence = AudioClip(lambda t: 0, duration=2)
-            extended_audio = concatenate_audioclips([audio, silence])
-            total_duration = base_duration + 2
+        # Handle background_path if it's a list (fix for the error)
+        if isinstance(background_path, list) and background_path:
+            # We're combining multiple videos
+            print(colored("Multiple background videos detected - combining videos", "blue"))
+            
+            # Trim the audio
+            clean_audio_path = trim_audio_file(audio_path, trim_end=0.12)
+            
+            # Get audio duration
+            audio_clip = AudioFileClip(clean_audio_path)
+            audio_duration = audio_clip.duration
+            
+            # Combine videos
+            combined_path = combine_videos(
+                video_paths=background_path, 
+                audio_duration=audio_duration,
+                target_duration=audio_duration
+            )
+            
+            if not combined_path:
+                print(colored("Error combining videos, using fallback background", "yellow"))
+                background_clip = ColorClip(
+                    size=(1080, 1920), 
+                    color=(25, 25, 25),
+                    duration=audio_duration
+                ).set_audio(audio_clip)
+            else:
+                # Load combined video
+                background_clip = VideoFileClip(combined_path)
+                background_clip = background_clip.set_audio(audio_clip)
+                
         else:
-            extended_audio = audio
-            total_duration = base_duration
-
-        # Process videos with the total duration
-        num_videos = len(paths)
-        segment_duration = base_duration / num_videos
-
-        print(colored(f"\n=== Video Generation Info ===", "blue"))
-        print(colored(f"Total duration: {total_duration:.2f}s", "cyan"))
-        print(colored(f"Using {num_videos} videos", "cyan"))
-        print(colored(f"Segment duration: {segment_duration:.2f}s", "cyan"))
-
-        # Process each video into a segment
-        current_time = 0
-        for i, path in enumerate(paths):
+            # Single background video
+            if isinstance(background_path, list):
+                background_path = background_path[0] if background_path else None
+            
+            # Trim the audio
+            clean_audio_path = trim_audio_file(audio_path, trim_end=0.12)
+            
+            # Load audio file
+            audio_clip = AudioFileClip(clean_audio_path)
+            audio_duration = audio_clip.duration
+            
+            # Load background video
+            background_clip = None
+            if background_path and os.path.exists(background_path):
+                try:
+                    background_clip = VideoFileClip(background_path)
+                    
+                    # Loop background if needed to match audio duration
+                    if background_clip.duration < audio_duration:
+                        # Multiple loops may be needed for very short backgrounds
+                        n_loops = math.ceil(audio_duration / background_clip.duration)
+                        background_clip = concatenate_videoclips([background_clip] * n_loops)
+                    
+                    # Trim background to match audio duration
+                    background_clip = background_clip.subclip(0, audio_duration)
+                    
+                    # Resize to 9:16 vertical format for shorts/reels
+                    background_clip = background_clip.resize(height=1920).resize(width=1080)
+                    
+                    # Center crop if needed
+                    if background_clip.w > 1080:
+                        x_offset = (background_clip.w - 1080) / 2
+                        background_clip = background_clip.crop(
+                            x1=x_offset, y1=0, x2=x_offset + 1080, y2=1920
+                        )
+                    
+                    # Add audio to background
+                    background_clip = background_clip.set_audio(audio_clip)
+                    
+                except Exception as e:
+                    print(colored(f"Error loading background: {str(e)}", "red"))
+                    background_clip = None
+                    
+            # If background loading failed, create a solid color clip
+            if background_clip is None:
+                print(colored("Creating fallback solid background", "yellow"))
+                background_clip = ColorClip(
+                    size=(1080, 1920), 
+                    color=(25, 25, 25),
+                    duration=audio_duration
+                ).set_audio(audio_clip)
+        
+        # Process subtitles if provided
+        if subtitles_path and os.path.exists(subtitles_path):
             try:
-                print(colored(f"\nProcessing video {i+1}/{num_videos}: {path}", "blue"))
-                clip = VideoFileClip(str(path))
-                
-                # Calculate this segment's duration
-                if i == num_videos - 1:
-                    this_segment_duration = total_duration - current_time
-                else:
-                    this_segment_duration = segment_duration + 0.5  # Add overlap for transition
-                
-                print(colored(f"Video duration: {clip.duration:.2f}s", "cyan"))
-                print(colored(f"Segment duration: {this_segment_duration:.2f}s", "cyan"))
-                
-                # Select portion of video
-                if clip.duration > this_segment_duration:
-                    max_start = clip.duration - this_segment_duration
-                    start_time = random.uniform(0, max_start)
-                    clip = clip.subclip(start_time, start_time + this_segment_duration)
-                    print(colored(f"Using section {start_time:.2f}s to {start_time + this_segment_duration:.2f}s", "cyan"))
-                else:
-                    clip = clip.loop(duration=this_segment_duration)
-                    print(colored("Looping video to match duration", "yellow"))
-                
-                # Resize to vertical format
-                clip = resize_to_vertical(clip)
-                
-                # Add smooth transitions
-                if i > 0:
-                    # Fade in while previous clip is still playing
-                    clip = clip.set_start(current_time - 0.5)  # Start 0.5s before current time
-                    clip = clip.crossfadein(0.5)  # Longer, smoother crossfade
-                
-                if i < num_videos - 1:
-                    clip = clip.crossfadeout(0.5)  # Longer fadeout to match fadein
-                
-                background_clips.append(clip)
-                current_time += segment_duration  # Use original segment duration for timing
-                
+                final_clip = process_subtitles(subtitles_path, background_clip)
             except Exception as e:
-                print(colored(f"Error processing video {i+1}: {str(e)}", "red"))
-                # Instead of black clip, duplicate previous clip or use next clip
-                if background_clips:
-                    fallback_clip = background_clips[-1].copy()
-                elif i < len(paths) - 1:
-                    # Try to use next clip if this is not the last one
-                    try:
-                        fallback_clip = VideoFileClip(str(paths[i+1]))
-                    except:
-                        fallback_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
-                else:
-                    fallback_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
-                
-                fallback_clip = fallback_clip.set_duration(this_segment_duration)
-                background_clips.append(fallback_clip)
-                current_time += segment_duration
-
-        # Combine all clips
-        print(colored("\nCombining video segments...", "blue"))
-        final_background = CompositeVideoClip(background_clips)
-        final_background = final_background.set_duration(total_duration)
+                print(colored(f"Error adding subtitles: {str(e)}", "red"))
+                final_clip = background_clip
+        else:
+            final_clip = background_clip
         
-        # Create final video with extended audio
-        video = final_background.set_audio(extended_audio)
-
-        # Add subtitles if provided
-        if subtitles_path and os.path.exists(subtitles_path):
-            print(colored("\n=== Processing Subtitles ===", "blue"))
-            video = process_subtitles(subtitles_path, video)
-
-        # Write final video
-        output_path = "temp/final_video.mp4"
-        video.write_videofile(
+        # Generate output path
+        output_dir = "output"
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        content_tag = f"_{content_type}" if content_type else ""
+        output_path = f"{output_dir}/video_{timestamp}{content_tag}.mp4"
+        
+        # Write final video with optimized settings
+        final_clip.write_videofile(
             output_path,
-            fps=30,
-            codec='libx264',
-            audio_codec='aac',
+            codec="libx264",
+            audio_codec="aac",
+            fps=24,
             threads=4,
-            preset='medium'
+            preset="faster",  # Use faster preset for speed
+            ffmpeg_params=["-crf", "28"]  # Lower quality for faster encoding
         )
         
-        # Clean up
-        video.close()
-        final_background.close()
-        audio.close()
-        extended_audio.close()
-        for clip in background_clips:
-            clip.close()
-        
+        print(colored(f"\n✓ Video saved to: {output_path}", "green"))
         return output_path
-
+        
     except Exception as e:
-        print(colored(f"Error generating video: {str(e)}", "red"))
+        print(colored(f"\n=== Video Generation Error ===", "red"))
+        print(colored(f"Error: {str(e)}", "red"))
+        print(colored(traceback.format_exc(), "red"))
         return None
 
 def generate_tts_audio(sentences: List[str], voice: str = "nova", style: str = "humorous") -> AudioFileClip:
@@ -1022,6 +1189,142 @@ Because it turns their 'do not disturb' mode on. 🚫👩‍💻"""
     except Exception as e:
         print(colored(f"Error in subtitle test: {str(e)}", "red"))
         print(colored(traceback.format_exc(), "red"))
+
+def generate_video_thumbnail(script, content_type):
+    """Generate a thumbnail for the video using script content"""
+    try:
+        # Create thumbnail directory
+        os.makedirs("temp/thumbnails", exist_ok=True)
+        
+        # Generate unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"temp/thumbnails/{content_type}_{timestamp}.jpg"
+        
+        # Initialize thumbnail generator
+        from thumbnail_generator import ThumbnailGenerator
+        generator = ThumbnailGenerator()
+        
+        # Extract main text from script (first line usually)
+        lines = script.strip().split('\n')
+        main_text = lines[0].replace('"', '').strip()
+        if len(main_text) > 30:
+            main_text = main_text[:27] + "..."
+            
+        # Get subtitle (second line if available)
+        subtitle = ""
+        if len(lines) > 1:
+            subtitle = lines[1].replace('"', '').strip()
+            if len(subtitle) > 20:
+                subtitle = subtitle[:17] + "..."
+        
+        # Extract emojis for thumbnail
+        emojis = [c for c in script if emoji.is_emoji(c)]
+        primary_emoji = emojis[0] if emojis else ""
+        
+        # Configure thumbnail based on content type
+        templates = {
+            'tech_humor': {
+                'bg_color': '#1E1E1E',
+                'gradient': ['#FF4D4D', '#1E1E1E'],
+                'text': main_text,
+                'subtitle': subtitle or 'Tech Humor',
+                'icon': primary_emoji or '🔥',
+                'tech_element': '💻',
+                'font_size': 120,
+                'subtitle_size': 72,
+                'text_color': '#FFFFFF',
+                'shadow_color': '#000000',
+                'effects': ['gradient', 'overlay', 'blur']
+            },
+            'coding_tips': {
+                'bg_color': '#0D2538',
+                'gradient': ['#1A4B6D', '#0D2538'],
+                'text': main_text,
+                'subtitle': subtitle or 'Coding Tips',
+                'icon': primary_emoji or '💡',
+                'tech_element': '⌨️',
+                'font_size': 110,
+                'subtitle_size': 70,
+                'text_color': '#FFFFFF',
+                'shadow_color': '#000000',
+                'effects': ['gradient', 'overlay', 'blur']
+            },
+            'life_hack': {
+                'bg_color': '#2B580C',
+                'gradient': ['#639A67', '#2B580C'],
+                'text': main_text,
+                'subtitle': subtitle or 'Life Hack',
+                'icon': primary_emoji or '✨',
+                'tech_element': '🔧',
+                'font_size': 110,
+                'subtitle_size': 68,
+                'text_color': '#FFFFFF',
+                'shadow_color': '#000000',
+                'effects': ['gradient', 'overlay']
+            },
+        }
+        
+        # Get template based on content type or use default
+        template = templates.get(content_type, templates['tech_humor'])
+        
+        # Create thumbnail image
+        img = Image.new('RGB', (1080, 1920), template['bg_color'])
+        
+        # Apply gradient
+        if 'gradient' in template['effects']:
+            gradient = generator.create_gradient(template['gradient'])
+            img = Image.blend(img, gradient, 0.8)
+            
+        # Apply overlay
+        if 'overlay' in template['effects']:
+            overlay = Image.new('RGB', (1080, 1920), template['bg_color'])
+            img = Image.blend(img, overlay, 0.4)
+            
+        # Load fonts
+        try:
+            title_font = ImageFont.truetype(generator.montserrat_bold, template['font_size'])
+            subtitle_font = ImageFont.truetype(generator.roboto_regular, template['subtitle_size'])
+        except Exception as e:
+            print(colored(f"Error loading fonts: {str(e)}", "red"))
+            title_font = ImageFont.load_default()
+            subtitle_font = ImageFont.load_default()
+            
+        draw = ImageDraw.Draw(img)
+        
+        # Add text with enhanced shadow
+        generator.draw_enhanced_text(
+            draw, 
+            template['text'], 
+            title_font, 
+            template['text_color'],
+            template['shadow_color'],
+            offset_y=-200
+        )
+        
+        generator.draw_enhanced_text(
+            draw, 
+            template['subtitle'], 
+            subtitle_font,
+            template['text_color'],
+            template['shadow_color'],
+            offset_y=-50
+        )
+        
+        # Add icon if available
+        if 'icon' in template and template['icon']:
+            emoji_img = get_emoji_image(template['icon'], size=300)
+            if emoji_img:
+                img.paste(emoji_img, (540, 1200), emoji_img)
+        
+        # Save with high quality
+        img.save(output_path, 'JPEG', quality=95)
+        print(colored(f"✓ Generated thumbnail: {output_path}", "green"))
+        
+        return output_path
+    
+    except Exception as e:
+        print(colored(f"Error generating thumbnail: {str(e)}", "red"))
+        return None
 
 if __name__ == "__main__":
     test_single_subtitle()
