@@ -1,10 +1,11 @@
+import pysrt
 from main import generate_video
 from youtube import upload_video
 from tiktok_upload import TikTokUploader
 import os
 from termcolor import colored
 from content_validator import ContentValidator, ScriptGenerator
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips, AudioClip
+from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips, AudioClip, CompositeAudioClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 from tiktokvoice import tts
 from video import generate_video, generate_subtitles, combine_videos, save_video, generate_tts_audio
@@ -323,11 +324,47 @@ class VideoGenerator:
             if not tts_path:
                 raise ValueError("Failed to generate TTS audio")
             
-            subtitles_path = await self._generate_subtitles(script, tts_path, channel_type)
-            if not subtitles_path:
-                raise ValueError("Failed to generate subtitles")
+            # Get audio duration for timing calculations
+            audio_clip = AudioFileClip(tts_path)
+            audio_duration = audio_clip.duration
+            audio_clip.close()
             
-            # Get background videos using script content
+            # Calculate padded duration
+            padded_duration = audio_duration + 3  # 1s at start + 2s at end
+            print(colored(f"Original audio duration: {audio_duration:.2f}s", "cyan"))
+            print(colored(f"Padded video duration: {padded_duration:.2f}s (1s intro + 2s outro)", "cyan"))
+            
+            # Apply 1-second delay to the audio
+            delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
+            delayed_audio = AudioFileClip(tts_path).set_start(1.0)  # Delay by 1 second
+
+            # Get the fps from the original audio
+            original_fps = delayed_audio.fps
+
+            # Create silence for padding
+            silence = AudioClip(lambda t: 0, duration=padded_duration)
+
+            # Composite audio with delayed speech
+            final_audio = CompositeAudioClip([silence, delayed_audio])
+
+            # Explicitly set the fps when writing
+            final_audio.write_audiofile(delayed_audio_path, fps=original_fps)
+            delayed_audio.close()
+            final_audio.close()
+            
+            # Generate subtitles with 1-second delay
+            subtitles_text = script
+            delayed_subtitles_path = await self._generate_delayed_subtitles(
+                script=subtitles_text, 
+                audio_path=delayed_audio_path, 
+                channel_type=channel_type,
+                delay=1.0
+            )
+            
+            if not delayed_subtitles_path:
+                raise ValueError("Failed to generate delayed subtitles")
+            
+            # Get background videos with padded duration
             background_paths = await self._process_background_videos(channel_type, script)
             if not background_paths:
                 raise ValueError("Failed to get background videos")
@@ -336,11 +373,12 @@ class VideoGenerator:
             if isinstance(background_paths, str):
                 background_paths = [background_paths]
             
-            # Generate final video
+            # Generate video with padded duration
             output_path = generate_video(
-                background_paths[0] if len(background_paths) == 1 else background_paths,
-                tts_path,
-                subtitles_path
+                background_paths,
+                delayed_audio_path,
+                delayed_subtitles_path,
+                channel_type
             )
             
             if not output_path:
@@ -385,13 +423,26 @@ class VideoGenerator:
             )
             
             # Save the audio file
+            temp_path = f"temp/tts/{channel_type}_raw.mp3"
             final_path = f"temp/tts/{channel_type}_latest.mp3"
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
             
-            with open(final_path, "wb") as f:
-                response.stream_to_file(final_path)
+            with open(temp_path, "wb") as f:
+                response.stream_to_file(temp_path)
             
-            print(colored("✓ Generated TTS audio", "green"))
+            # Trim 0.1 seconds from the end to remove strange sounds
+            audio_clip = AudioFileClip(temp_path)
+            trimmed_duration = max(0.1, audio_clip.duration - 0.1)  # Ensure we don't get negative duration
+            trimmed_audio = audio_clip.subclip(0, trimmed_duration)
+            trimmed_audio.write_audiofile(final_path)
+            
+            # Clean up
+            audio_clip.close()
+            trimmed_audio.close()
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            
+            print(colored(f"✓ Generated TTS audio and trimmed 0.1s from end", "green"))
             return final_path
             
         except Exception as e:
@@ -403,7 +454,7 @@ class VideoGenerator:
         try:
             print(colored("\n=== Generating Subtitles ===", "blue"))
             
-            # Generate subtitles with audio timing
+            # Directly use the function from video.py
             subtitles_path = generate_subtitles(
                 script=script,
                 audio_path=tts_path,
@@ -827,6 +878,42 @@ class VideoGenerator:
         except Exception as e:
             print(colored(f"Error during cleanup: {str(e)}", "yellow"))
 
+    async def _generate_delayed_subtitles(self, script, audio_path, channel_type, delay=1.0):
+        """Generate subtitles with a delay for padding"""
+        try:
+            print(colored(f"\n=== Generating Subtitles with {delay}s Delay ===", "blue"))
+            
+            # First generate normal subtitles
+            temp_subs_path = generate_subtitles(
+                script=script,
+                audio_path=audio_path,
+                content_type=channel_type
+            )
+            
+            if not temp_subs_path:
+                raise ValueError("Failed to generate base subtitles")
+            
+            # Now shift all subtitles by the delay
+            delayed_subs_path = f"temp/subtitles/delayed_{uuid.uuid4()}.srt"
+            
+            # Read original subtitles
+            subs = pysrt.open(temp_subs_path)
+            
+            # Shift all subtitles by the delay amount
+            for sub in subs:
+                sub.start.seconds += delay
+                sub.end.seconds += delay
+            
+            # Save shifted subtitles
+            subs.save(delayed_subs_path, encoding='utf-8-sig')
+            
+            print(colored(f"✓ Generated subtitles with {delay}s delay", "green"))
+            return delayed_subs_path
+            
+        except Exception as e:
+            print(colored(f"Delayed subtitles generation failed: {str(e)}", "red"))
+            return None
+
 def generate_video_for_channel(channel, topic, hashtags):
     """Generate and upload a video for a specific channel"""
     try:
@@ -876,133 +963,3 @@ def generate_video_for_channel(channel, topic, hashtags):
         print(colored(f"[-] Error generating video for {channel}: {str(e)}", "red"))
         return False
 
-def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
-    """
-    Combine videos by clipping segments from each video to match audio timing.
-    Each video will contribute a portion to the final video.
-    """
-    try:
-        clips = []
-        
-        # Get audio clip to analyze timing
-        audio_clip = AudioFileClip("temp/tts/tech_humor_latest.mp3")
-        total_duration = audio_clip.duration
-        
-        print(colored("\n=== Video Combination Debug Info ===", "blue"))
-        print(colored(f"Audio duration: {total_duration:.2f}s", "cyan"))
-        print(colored(f"Number of videos: {len(video_paths)}", "cyan"))
-        print(colored(f"Target duration: {target_duration:.2f}s", "cyan"))
-        
-        # Calculate segment duration for each video
-        num_videos = len(video_paths)
-        segment_duration = total_duration / num_videos
-        
-        print(colored("\n=== Segment Calculations ===", "blue"))
-        print(colored(f"Segment duration per video: {segment_duration:.2f}s", "cyan"))
-        
-        # Track our position in the timeline
-        current_time = 0
-        
-        for i, video_path in enumerate(video_paths):
-            try:
-                print(colored(f"\n=== Processing Video {i+1}/{num_videos} ===", "blue"))
-                print(colored(f"Video path: {video_path}", "cyan"))
-                
-                # Load video
-                video = VideoFileClip(video_path)
-                print(colored(f"Original video duration: {video.duration:.2f}s", "cyan"))
-                print(colored(f"Original video size: {video.size}", "cyan"))
-                
-                # Calculate this segment's duration
-                if i == num_videos - 1:
-                    this_segment_duration = total_duration - current_time
-                else:
-                    this_segment_duration = segment_duration
-                
-                print(colored(f"Target segment duration: {this_segment_duration:.2f}s", "cyan"))
-                
-                # Select portion of video to use
-                if video.duration > this_segment_duration:
-                    max_start = video.duration - this_segment_duration
-                    video_start = random.uniform(0, max_start)
-                    print(colored(f"Video longer than needed:", "yellow"))
-                    print(colored(f"- Max start time: {max_start:.2f}s", "yellow"))
-                    print(colored(f"- Selected start: {video_start:.2f}s", "yellow"))
-                    print(colored(f"- Will use: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s", "yellow"))
-                    
-                    # Create clip from portion of video
-                    clip = (video
-                           .subclip(video_start, video_start + this_segment_duration)
-                           .resize(width=1080)
-                           .set_position(("center", "center")))
-                else:
-                    print(colored(f"Video shorter than needed - will loop", "yellow"))
-                    print(colored(f"- Original duration: {video.duration:.2f}s", "yellow"))
-                    print(colored(f"- Need duration: {this_segment_duration:.2f}s", "yellow"))
-                    
-                    # Create looped clip
-                    clip = (video
-                           .loop(duration=this_segment_duration)
-                           .resize(width=1080)
-                           .set_position(("center", "center")))
-                
-                print(colored(f"Created clip duration: {clip.duration:.2f}s", "green"))
-                
-                # Add transition effects
-                if i > 0:
-                    print(colored("Adding entrance crossfade", "cyan"))
-                    clip = clip.crossfadein(0.3)
-                if i < num_videos - 1:
-                    print(colored("Adding exit crossfade", "cyan"))
-                    clip = clip.crossfadeout(0.3)
-                
-                clips.append(clip)
-                current_time += this_segment_duration
-                print(colored(f"Current total time: {current_time:.2f}s / {total_duration:.2f}s", "green"))
-                
-            except Exception as e:
-                print(colored(f"Error processing video {i+1}:", "red"))
-                print(colored(f"Error details: {str(e)}", "red"))
-                print(colored("Creating fallback black clip", "yellow"))
-                color_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
-                clips.append(color_clip)
-                current_time += this_segment_duration
-        
-        print(colored("\n=== Finalizing Video ===", "blue"))
-        print(colored(f"Number of clips to combine: {len(clips)}", "cyan"))
-        
-        # Combine all clips
-        final_clip = concatenate_videoclips(clips, method="compose")
-        print(colored(f"Final clip duration: {final_clip.duration:.2f}s", "cyan"))
-        
-        # Ensure exact duration match
-        if abs(final_clip.duration - total_duration) > 0.1:
-            print(colored(f"Duration mismatch of {abs(final_clip.duration - total_duration):.2f}s - adjusting...", "yellow"))
-            final_clip = final_clip.set_duration(total_duration)
-        
-        # Save combined video
-        output_path = "temp_combined.mp4"
-        print(colored(f"\nSaving to: {output_path}", "blue"))
-        
-        final_clip.write_videofile(
-            output_path,
-            threads=n_threads,
-            codec='libx264',
-            audio=False,
-            fps=30
-        )
-        
-        # Clean up
-        print(colored("\nCleaning up resources...", "blue"))
-        audio_clip.close()
-        for clip in clips:
-            clip.close()
-        final_clip.close()
-        
-        return output_path
-        
-    except Exception as e:
-        print(colored("\n=== Error in combine_videos ===", "red"))
-        print(colored(f"Error type: {type(e).__name__}", "red"))
-        print(colored(f"Error details: {str(e)}", "red"))
-        return None 
