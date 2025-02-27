@@ -146,6 +146,12 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
         # Keep track of current position in the timeline
         current_time = 0
         
+        # Create clips list with positions for each clip
+        positioned_clips = []
+        
+        # Transition duration (shorter for smoother transitions)
+        transition_duration = 0.5
+        
         for i, video_data in enumerate(video_paths):
             try:
                 print(colored(f"\n=== Processing Video {i+1}/{num_videos} ===", "blue"))
@@ -194,8 +200,8 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                 
                 print(colored(f"Using segment: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s", "cyan"))
                 
-                # Create clip - FIX: Use explicit values instead of lambda functions
-                clip = video.subclip(video_start, video_start + this_segment_duration)
+                # Create clip - Use explicit values instead of lambda functions
+                clip = video.subclip(video_start, video_start + this_segment_duration + (transition_duration if i < num_videos - 1 else 0))
                 
                 # Resize to maintain height
                 clip = clip.resize(height=1920)
@@ -225,18 +231,19 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                 else:
                     clip = clip.resize(1.03)  # 3% zoom
                 
-                # Handle modern transitions
-                if i > 0:
-                    print(colored("Adding smooth transition...", "cyan"))
-                    clip = clip.crossfadein(0.6)
-                
-                if i < num_videos - 1:
-                    clip = clip.crossfadeout(0.6)
-                
                 # Apply very subtle brightness adjustment
                 clip = clip.fx(vfx.colorx, 1.05)  # Simpler than using enhancer
                 
-                clips.append(clip)
+                # Calculate clip position with overlapping for transitions
+                # Each clip starts a bit before the previous one ends
+                clip_start = current_time
+                if i > 0:
+                    clip_start -= transition_duration
+                
+                # Add clip with position
+                positioned_clips.append((clip, clip_start))
+                
+                # Update current time
                 current_time += this_segment_duration
                 print(colored(f"Current total time: {current_time:.2f}s / {total_duration:.2f}s", "green"))
                 
@@ -277,18 +284,27 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                     
                     fallback_clip = CompositeVideoClip([fallback_clip, txt_clip])
                     
+                    # Add clip with position
+                    positioned_clips.append((fallback_clip, current_time))
+                    current_time += this_segment_duration
+                    
                 except Exception:
                     # If styled clip fails, use simple color clip
                     fallback_clip = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=this_segment_duration)
-                
-                clips.append(fallback_clip)
-                current_time += this_segment_duration
+                    positioned_clips.append((fallback_clip, current_time))
+                    current_time += this_segment_duration
         
-        print(colored("\n=== Finalizing Video ===", "blue"))
-        print(colored(f"Number of clips to combine: {len(clips)}", "cyan"))
+        print(colored("\n=== Creating Final Composite Video ===", "blue"))
+        print(colored(f"Number of clips to combine: {len(positioned_clips)}", "cyan"))
         
-        # Combine all clips
-        final_clip = concatenate_videoclips(clips, method="compose")
+        # Create a list of clips with set_start times to handle proper overlapping transitions
+        composite_clips = []
+        for clip, start_time in positioned_clips:
+            # Set the start time for each clip for proper overlapping
+            composite_clips.append(clip.set_start(start_time))
+        
+        # Create composite with all clips
+        final_clip = CompositeVideoClip(composite_clips, size=(1080, 1920))
         print(colored(f"Final clip duration: {final_clip.duration:.2f}s", "cyan"))
         
         # Ensure exact duration match
@@ -310,7 +326,7 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
         
         # Clean up
         print(colored("\nCleaning up resources...", "blue"))
-        for clip in clips:
+        for clip, _ in positioned_clips:
             clip.close()
         final_clip.close()
         
