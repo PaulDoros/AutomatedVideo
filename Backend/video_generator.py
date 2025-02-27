@@ -329,10 +329,10 @@ class VideoGenerator:
             audio_duration = audio_clip.duration
             audio_clip.close()
             
-            # Calculate padded duration
-            padded_duration = audio_duration + 3  # 1s at start + 2s at end
+            # Calculate padded duration with extra buffer to prevent black screens
+            padded_duration = audio_duration + 3.5  # 1s at start + 2.5s at end for safety
             print(colored(f"Original audio duration: {audio_duration:.2f}s", "cyan"))
-            print(colored(f"Padded video duration: {padded_duration:.2f}s (1s intro + 2s outro)", "cyan"))
+            print(colored(f"Padded video duration: {padded_duration:.2f}s (1s intro + 2.5s outro)", "cyan"))
             
             # Apply 1-second delay to the audio
             delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
@@ -373,12 +373,13 @@ class VideoGenerator:
             if isinstance(background_paths, str):
                 background_paths = [background_paths]
             
-            # Generate video with padded duration
+            # Generate video with padded duration - pass the exact padded duration
             output_path = generate_video(
                 background_paths,
                 delayed_audio_path,
                 delayed_subtitles_path,
-                channel_type
+                channel_type,
+                target_duration=padded_duration  # Explicitly pass the padded duration
             )
             
             if not output_path:
