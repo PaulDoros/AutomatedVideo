@@ -3,7 +3,7 @@ import uuid
 import requests
 from typing import List
 from moviepy.editor import *
-from termcolor import colored
+from termcolor import colored, cprint
 from datetime import timedelta
 from moviepy.video.fx.all import crop
 from moviepy.video.tools.subtitles import SubtitlesClip
@@ -26,9 +26,47 @@ from emoji_data_python import emoji_data
 from io import BytesIO
 import re
 import math
+import time
 
 # First activate your virtual environment and install pysrt:
 # python -m pip install pysrt --no-cache-dir
+
+# ===== LOGGING FUNCTIONS =====
+def log_section(title, emoji="✨"):
+    """Print a section header with emoji"""
+    print("\n")
+    cprint(f"=== {emoji} {title} {emoji} ===", "blue", attrs=["bold"])
+
+def log_error(message, emoji="❌"):
+    """Log an error message in red with emoji"""
+    cprint(f"{emoji} Error: {message}", "red")
+
+def log_warning(message, emoji="⚠️"):
+    """Log a warning message in yellow with emoji"""
+    cprint(f"{emoji} Warning: {message}", "yellow")
+
+def log_info(message, emoji="ℹ️"):
+    """Log an info message in cyan with emoji"""
+    cprint(f"{emoji} {message}", "cyan")
+
+def log_success(message, emoji="✅"):
+    """Log a success message in green with emoji"""
+    cprint(f"{emoji} {message}", "green")
+
+def log_processing(message, emoji="⏳"):
+    """Log a processing message in magenta with emoji"""
+    cprint(f"{emoji} {message}", "magenta")
+
+def log_progress(current, total, prefix="", suffix="", length=30):
+    """Show a progress bar with percentage"""
+    percent = int(100 * (current / float(total)))
+    filled_length = int(length * current // total)
+    bar = '█' * filled_length + '░' * (length - filled_length)
+    print(f'\r{prefix} |{bar}| {percent}% {suffix}', end='\r')
+    if current == total:
+        print()
+
+# ===== END LOGGING FUNCTIONS =====
 
 def save_video(video_url: str, directory: str) -> str:
     """Saves a video from URL to specified directory"""
@@ -556,15 +594,36 @@ def get_emoji_image(emoji_char, size=120):
         cache_dir = "../temp/emoji_cache"
         os.makedirs(cache_dir, exist_ok=True)
         
-        # Pre-process the emoji string to remove all variation selectors
-        # This includes FE0F (variation selector-16) and other invisible formatting characters
-        cleaned_emoji = ''.join(c for c in emoji_char if not (0xFE00 <= ord(c) <= 0xFE0F))
+        # More comprehensive emoji cleaning to prevent square characters
+        # Remove variation selectors, zero-width joiners, and other special characters
+        special_chars = [
+            (0xFE00, 0xFE0F),  # Variation Selectors
+            (0x200D, 0x200D),  # Zero Width Joiner
+            (0x20D0, 0x20FF),  # Combining Diacritical Marks for Symbols
+            (0x1F3FB, 0x1F3FF),  # Emoji Modifiers (skin tones)
+            (0x200B, 0x200F),  # Zero Width Space, Zero Width Non-Joiner, etc.
+            (0x2060, 0x206F)   # Word Joiner, Invisible Times, etc.
+        ]
+        
+        # Clean the emoji by removing all special characters
+        cleaned_emoji = ""
+        for c in emoji_char:
+            should_keep = True
+            for start, end in special_chars:
+                if start <= ord(c) <= end:
+                    should_keep = False
+                    break
+            if should_keep:
+                cleaned_emoji += c
+        
+        # If cleaning removed everything, use the original
+        if not cleaned_emoji:
+            cleaned_emoji = emoji_char
         
         # Convert emoji to unicode code points
         emoji_code = "-".join(
             format(ord(c), 'x').lower()
             for c in cleaned_emoji
-            if not (ord(c) >= 0xFE00 and ord(c) <= 0xFE0F)  # More thoroughly skip all variation selectors
         )
         
         # Check cache first
@@ -591,14 +650,26 @@ def get_emoji_image(emoji_char, size=120):
                 
                 return emoji_img
             else:
-                print(colored(f"Failed to download emoji: {cleaned_emoji} (HTTP {response.status_code})", "yellow"))
+                log_warning(f"Failed to download emoji: {cleaned_emoji} (HTTP {response.status_code})")
+                # Try with just the first character if it's a multi-character emoji
+                if len(cleaned_emoji) > 1:
+                    first_char = cleaned_emoji[0]
+                    first_code = format(ord(first_char), 'x').lower()
+                    url = f"https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/{first_code}.png"
+                    response = requests.get(url, timeout=5)
+                    if response.status_code == 200:
+                        emoji_img = Image.open(BytesIO(response.content)).convert('RGBA')
+                        emoji_img = emoji_img.resize((size, size), Image.Resampling.LANCZOS)
+                        emoji_img.save(cache_path, 'PNG')
+                        return emoji_img
+                
                 return create_fallback_emoji(size, cleaned_emoji)
         except Exception as e:
-            print(colored(f"Error downloading emoji: {str(e)}", "red"))
+            log_warning(f"Error downloading emoji: {str(e)}")
             return create_fallback_emoji(size, cleaned_emoji)
             
     except Exception as e:
-        print(colored(f"Error getting emoji image for {emoji_char}: {str(e)}", "red"))
+        log_warning(f"Error getting emoji image for {emoji_char}: {str(e)}")
         return create_fallback_emoji(size, emoji_char)
 
 def create_fallback_emoji(size=120, emoji_char=None):
@@ -633,150 +704,182 @@ def create_fallback_emoji(size=120, emoji_char=None):
     return img
 
 def create_text_with_emoji(txt, size=(1080, 800)):
-    """Create text with colored emojis using Pillow"""
+    """Create text image with emoji support"""
     try:
-        # Create a transparent background for Shorts
-        image = Image.new('RGBA', (1080, 800), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
+        # Create a transparent background
+        img = Image.new('RGBA', size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
         
-        # First split into sentences to preserve order
-        sentences = txt.split('. ')
-        formatted_lines = []
-        
-        for sentence in sentences:
-            # Process each sentence
-            words = []
-            fragments = sentence.split()
-            
-            # Process each word, keeping emojis separate
-            for fragment in fragments:
-                emoji_parts = []
-                text_parts = []
-                current_text = ""
-                
-                # Find emojis in this fragment
-                for char in fragment:
-                    if emoji.is_emoji(char):
-                        if current_text:
-                            text_parts.append(current_text)
-                            current_text = ""
-                        emoji_parts.append(char)
-                    else:
-                        current_text += char
-                
-                if current_text:
-                    text_parts.append(current_text)
-                
-                # Add text first, then emojis (to maintain order)
-                if text_parts:
-                    words.append(("text", " ".join(text_parts)))
-                for emoji_char in emoji_parts:
-                    words.append(("emoji", emoji_char))
-            
-            # Add this processed sentence
-            if words:
-                formatted_lines.append(words)
-        
-        # Load font - slightly smaller for better fitting
+        # Load font - REDUCED SIZE for better fit on YouTube Shorts
         try:
-            text_font = ImageFont.truetype('arial.ttf', 95)
-        except:
-            text_font = ImageFont.load_default()
+            font_path = "assets/fonts/Montserrat-Bold.ttf"
+            if not os.path.exists(font_path):
+                font_path = "C:/Windows/Fonts/Arial.ttf"  # Fallback for Windows
+            font = ImageFont.truetype(font_path, 70)  # Increased from 60 to 70 for better visibility
+        except Exception:
+            font = ImageFont.load_default()
         
-        # Compute wrapped lines with proper word breaks
-        final_lines = []
-        max_width = 850  # Narrow width to ensure wrapping
+        # Detect and extract emojis
+        emoji_pattern = emoji.get_emoji_regexp()
         
-        for sentence_parts in formatted_lines:
-            current_line = []
-            current_width = 0
+        # IMPROVED TEXT WRAPPING FOR SHORTS
+        # Calculate max width for text (narrower than the full width)
+        max_width = int(size[0] * 0.85)  # Use only 85% of width
+        
+        # Split text into words for wrapping
+        words = txt.split()
+        lines = []
+        current_line = []
+        current_width = 0
+        
+        for word in words:
+            # Check if word contains emoji
+            has_emoji = emoji_pattern.search(word)
             
-            for part_type, content in sentence_parts:
-                width_to_add = 0
-                if part_type == "text":
-                    # Split long text if needed
-                    words = content.split()
-                    if len(words) > 1:
-                        for word in words:
-                            word_bbox = draw.textbbox((0, 0), word + " ", font=text_font)
-                            word_width = word_bbox[2] - word_bbox[0]
-                            
-                            if current_width + word_width > max_width and current_line:
-                                final_lines.append(current_line)
-                                current_line = [("text", word)]
-                                current_width = word_width
-                            else:
-                                current_line.append(("text", word))
-                                current_width += word_width + 10
-                    else:
-                        word_bbox = draw.textbbox((0, 0), content + " ", font=text_font)
-                        word_width = word_bbox[2] - word_bbox[0]
-                        
-                        if current_width + word_width > max_width and current_line:
-                            final_lines.append(current_line)
-                            current_line = [("text", content)]
-                            current_width = word_width
-                        else:
-                            current_line.append(("text", content))
-                            current_width += word_width + 10
-                else:  # Emoji
-                    emoji_width = 130
-                    if current_width + emoji_width > max_width and current_line:
-                        final_lines.append(current_line)
-                        current_line = [("emoji", content)]
-                        current_width = emoji_width
-                    else:
-                        current_line.append(("emoji", content))
-                        current_width += emoji_width + 10
+            # Calculate word width (approximate for emojis)
+            if has_emoji:
+                # Count emojis in word
+                emoji_count = len([c for c in word if emoji.is_emoji(c)])
+                non_emoji_text = ''.join([c for c in word if not emoji.is_emoji(c)])
+                
+                try:
+                    text_width = draw.textlength(non_emoji_text, font=font)
+                except AttributeError:
+                    text_width, _ = draw.textsize(non_emoji_text, font=font)
+                
+                word_width = text_width + (emoji_count * 80)  # Emoji width approximation
+            else:
+                try:
+                    word_width = draw.textlength(word, font=font)
+                except AttributeError:
+                    word_width, _ = draw.textsize(word, font=font)
             
-            if current_line:
-                final_lines.append(current_line)
+            # Check if adding this word exceeds max width
+            if current_width + word_width <= max_width:
+                current_line.append(word)
+                current_width += word_width + 10  # Add space width
+            else:
+                # Start new line
+                if current_line:
+                    lines.append(' '.join(current_line))
+                current_line = [word]
+                current_width = word_width
         
-        # Calculate total height for all wrapped lines
-        line_height = max(text_font.size, 130) + 30
-        total_height = len(final_lines) * line_height
-        y = (image.height - total_height) // 2
+        # Add the last line
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        # If we have no lines (rare case), just use the original text
+        if not lines:
+            lines = [txt]
+        
+        # Calculate total height needed for all lines
+        line_height = int(font.size * 1.2)  # 20% spacing between lines
+        total_text_height = len(lines) * line_height
+        
+        # Position text vertically centered
+        y_position = (size[1] - total_text_height) // 2
         
         # Draw each line
-        for line in final_lines:
+        for line in lines:
+            # Detect and extract emojis for this line
+            parts = []
+            last_end = 0
+            
+            for match in emoji_pattern.finditer(line):
+                start, end = match.span()
+                if start > last_end:
+                    parts.append((line[last_end:start], False))
+                parts.append((line[start:end], True))
+                last_end = end
+            
+            if last_end < len(line):
+                parts.append((line[last_end:], False))
+            
             # Calculate line width for centering
-            line_width = 0
-            for part_type, content in line:
-                if part_type == "text":
-                    bbox = draw.textbbox((0, 0), content + " ", font=text_font)
-                    line_width += bbox[2] - bbox[0]
-                else:  # emoji
-                    line_width += 130 + 10
+            text_without_emoji = "".join(part for part, is_emoji in parts if not is_emoji)
+            try:
+                text_width = draw.textlength(text_without_emoji, font=font)
+            except AttributeError:
+                text_width, _ = draw.textsize(text_without_emoji, font=font)
             
-            # Center this line
-            x = (image.width - line_width) // 2
+            # Calculate emoji count and approximate width
+            emoji_count = sum(1 for _, is_emoji in parts if is_emoji)
+            emoji_width = emoji_count * 80  # Approximate width of each emoji
             
-            # Draw each part
-            for part_type, content in line:
-                if part_type == "text":
-                    # Draw text with stroke
-                    stroke_width = 6
-                    for adj in range(-stroke_width, stroke_width+1):
-                        for adj2 in range(-stroke_width, stroke_width+1):
-                            draw.text((x+adj, y+adj2), content, font=text_font, fill=(0, 0, 0, 255))
-                    
-                    draw.text((x, y), content, font=text_font, fill=(255, 255, 255, 255))
-                    bbox = draw.textbbox((0, 0), content + " ", font=text_font)
-                    x += bbox[2] - bbox[0] + 5
+            total_width = text_width + emoji_width
+            x_position = (size[0] - total_width) / 2
+            
+            # Draw text with emojis
+            current_x = x_position
+            
+            for part, is_emoji in parts:
+                if is_emoji:
+                    # Enhanced emoji handling - try multiple approaches
+                    try:
+                        # First try with our improved emoji handling
+                        emoji_img = get_emoji_image(part, size=80)  # Increased from 70 to 80
+                        if emoji_img:
+                            img.paste(emoji_img, (int(current_x), int(y_position)), emoji_img)
+                            current_x += 80  # Increased from 70 to 80
+                        else:
+                            # If that fails, just draw the emoji as text
+                            # Draw text outline/stroke for better visibility
+                            stroke_width = 3
+                            for offset_x in range(-stroke_width, stroke_width + 1):
+                                for offset_y in range(-stroke_width, stroke_width + 1):
+                                    if offset_x == 0 and offset_y == 0:
+                                        continue
+                                    draw.text((current_x + offset_x, y_position + offset_y), part, fill=(0, 0, 0, 255), font=font)
+                            
+                            # Draw the main text
+                            draw.text((current_x, y_position), part, fill=(255, 255, 255, 255), font=font)
+                            try:
+                                current_x += draw.textlength(part, font=font)
+                            except AttributeError:
+                                width, _ = draw.textsize(part, font=font)
+                                current_x += width
+                    except Exception as e:
+                        log_warning(f"Error processing emoji: {str(e)}")
+                        # Just draw the emoji as text with stroke
+                        stroke_width = 3
+                        for offset_x in range(-stroke_width, stroke_width + 1):
+                            for offset_y in range(-stroke_width, stroke_width + 1):
+                                if offset_x == 0 and offset_y == 0:
+                                    continue
+                                draw.text((current_x + offset_x, y_position + offset_y), part, fill=(0, 0, 0, 255), font=font)
+                        
+                        # Draw the main text
+                        draw.text((current_x, y_position), part, fill=(255, 255, 255, 255), font=font)
+                        try:
+                            current_x += draw.textlength(part, font=font)
+                        except AttributeError:
+                            width, _ = draw.textsize(part, font=font)
+                            current_x += width
                 else:
-                    # Draw emoji
-                    emoji_img = get_emoji_image(content, size=130)
-                    if emoji_img:
-                        emoji_y = y + (text_font.size - 130) // 2
-                        image.paste(emoji_img, (x, emoji_y), emoji_img)
-                    x += 130 + 10
+                    # Draw regular text with stroke/outline for better visibility
+                    stroke_width = 3
+                    for offset_x in range(-stroke_width, stroke_width + 1):
+                        for offset_y in range(-stroke_width, stroke_width + 1):
+                            if offset_x == 0 and offset_y == 0:
+                                continue
+                            draw.text((current_x + offset_x, y_position + offset_y), part, fill=(0, 0, 0, 255), font=font)
+                    
+                    # Draw the main text
+                    draw.text((current_x, y_position), part, fill=(255, 255, 255, 255), font=font)
+                    try:
+                        current_x += draw.textlength(part, font=font)
+                    except AttributeError:
+                        width, _ = draw.textsize(part, font=font)
+                        current_x += width
             
-            y += line_height
+            # Move to next line
+            y_position += line_height
         
-        return image
-    
+        return img
+        
     except Exception as e:
-        print(colored(f"Error creating text with emoji: {str(e)}", "red"))
+        log_error(f"Error creating text with emoji: {str(e)}")
         return None
 
 def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
@@ -791,8 +894,9 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         if not clean_txt:
             return None
         
-        # Create image with text and emojis
-        text_image = create_text_with_emoji(clean_txt)
+        # Create image with text and emojis - OPTIMIZED FOR SHORTS
+        # Use a taller image size to accommodate multiple lines
+        text_image = create_text_with_emoji(clean_txt, size=(1080, 900))
         if text_image is None:
             return None
         
@@ -810,7 +914,7 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         # Add effects with smoother crossfades
         final_clip = (txt_clip
             .set_duration(duration)
-            .set_position(('center', 'center'))
+            .set_position(('center', 'center'))  # Center in the middle of the screen
             .crossfadein(0.2))  # Slightly longer fade in
         
         # Add fade out based on position
@@ -822,48 +926,42 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         return final_clip
         
     except Exception as e:
-        print(colored(f"Subtitle error: {str(e)}", "red"))
-        print(colored(f"Text content: {txt}", "yellow"))
+        log_error(f"Subtitle error: {str(e)}")
+        log_error(f"Text content: {txt}")
         return None
 
 def trim_audio_file(audio_path, trim_end=0.15):
-    """Trim and clean audio file for professional sound"""
+    """Trim silence and artifacts from audio file"""
     try:
+        print(colored(f"Trimming audio file: {audio_path}", "cyan"))
+        
         # Load audio
         audio = AudioFileClip(audio_path)
         
-        # Apply trimming and audio processing
-        if audio.duration > trim_end + 0.5:
-            # Trim end and slightly fade out
-            trimmed_audio = audio.subclip(0, audio.duration - trim_end)
-            # Add subtle fadeout to prevent abrupt ending
-            trimmed_audio = trimmed_audio.audio_fadeout(0.15)
-            
-            # Save to a new output path
-            output_dir = os.path.dirname(audio_path)
-            base_name = os.path.basename(audio_path)
-            name_parts = os.path.splitext(base_name)
-            output_path = os.path.join(output_dir, f"{name_parts[0]}_clean{name_parts[1]}")
-            
-            # Write to new file with high quality
-            trimmed_audio.write_audiofile(
-                output_path, 
-                codec='mp3', 
-                fps=44100, 
-                bitrate="192k"  # Higher bitrate for better quality
-            )
-            print(colored(f"✓ Enhanced audio quality and trimmed {trim_end}s", "green"))
-            
-            # Clean up
-            audio.close()
-            trimmed_audio.close()
-            
-            return output_path
+        # Increase trim amount to remove strange sounds at the end
+        trim_end = 0.3  # Increase from 0.15 to 0.3 seconds
         
+        # Calculate new duration
+        new_duration = max(0.1, audio.duration - trim_end)
+        
+        # Trim the audio
+        trimmed_audio = audio.subclip(0, new_duration)
+        
+        # Add a gentle fade out
+        trimmed_audio = trimmed_audio.audio_fadeout(0.2)
+        
+        # Save to the same path
+        trimmed_audio.write_audiofile(audio_path, fps=44100)
+        
+        # Clean up
+        audio.close()
+        trimmed_audio.close()
+        
+        print(colored(f"✓ Trimmed {trim_end}s from end of audio", "green"))
         return audio_path
         
     except Exception as e:
-        print(colored(f"Error processing audio: {str(e)}", "yellow"))
+        print(colored(f"Error trimming audio: {str(e)}", "red"))
         return audio_path
 
 def enhance_tts_prompt(script, content_type):
@@ -911,21 +1009,22 @@ def enhance_tts_prompt(script, content_type):
 def process_subtitles(subs_path, base_video):
     """Process subtitles with clean, instant transitions"""
     try:
-        print(colored("\n=== Processing Subtitles ===", "blue"))
+        log_section("Processing Subtitles", "🔤")
         
         # Load subtitles - validate they're proper SRT format
         try:
             subs = pysrt.open(subs_path)
             # Filter out any overly long subtitles that might be errors
             subs = [sub for sub in subs if len(sub.text) < 200]  # Skip any suspiciously long subtitle
-            print(colored(f"Found {len(subs)} subtitles", "green"))
+            log_success(f"Found {len(subs)} subtitles")
         except Exception as e:
-            print(colored(f"Error loading subtitles: {str(e)}", "red"))
+            log_error(f"Error loading subtitles: {str(e)}")
             return base_video
         
         # Pre-render all subtitle images with consistent styling
         subtitle_data = []
         
+        log_info("Preparing subtitle images...")
         for i, sub in enumerate(subs):
             # Clean subtitle text
             text = sub.text.replace('\n', ' ').strip().strip('"')
@@ -934,7 +1033,7 @@ def process_subtitles(subs_path, base_video):
                 
             # Skip duplicate/combined subtitles (longer than 100 chars)
             if len(text) > 100:
-                print(colored(f"Skipping long subtitle: {text[:30]}...", "yellow"))
+                log_warning(f"Skipping long subtitle: {text[:30]}...")
                 continue
             
             # Calculate timing
@@ -946,10 +1045,11 @@ def process_subtitles(subs_path, base_video):
             if is_last:
                 # ALWAYS extend the last subtitle to the end to prevent black screens
                 end_time = base_video.duration
-                print(colored(f"✓ Extended final subtitle until end of video", "green"))
+                log_success("Extended final subtitle until end of video", "🏁")
             
-            # Create text image
-            text_image = create_text_with_emoji(text)
+            # Create text image - OPTIMIZED FOR SHORTS
+            # Use a taller image size to accommodate multiple lines
+            text_image = create_text_with_emoji(text, size=(1080, 900))
             if text_image is None:
                 continue
                 
@@ -963,113 +1063,123 @@ def process_subtitles(subs_path, base_video):
                 'is_first': (i == 0)
             })
             
-            print(colored(f"Prepared subtitle: {text}", "green"))
+            # Show progress every few subtitles
+            if (i + 1) % 5 == 0 or i == len(subs) - 1:
+                log_progress(i + 1, len(subs), prefix="Subtitle Preparation:", suffix="Complete")
         
         # Fast track: If no subtitles, return base video
         if not subtitle_data:
+            log_warning("No valid subtitles found, returning base video")
             return base_video
         
         # Create clips for each subtitle with NO transitions
+        log_info("Creating subtitle clips...")
         subtitle_clips = []
         
-        for data in subtitle_data:
+        for i, data in enumerate(subtitle_data):
             # Convert PIL image to MoviePy clip
             img_array = np.array(data['image'])
             duration = data['end'] - data['start']
             
             # Create clip with NO fade effects - completely eliminate transitions
+            # Position in the center of the screen (both horizontally and vertically)
             sub_clip = (ImageClip(img_array)
                 .set_duration(duration)
-                .set_position(('center', 'center'))
+                .set_position(('center', 'center'))  # Center in the middle of the screen
                 .set_start(data['start']))
             
-            # NO FADES AT ALL - this prevents any black text issues
-            # Just use the clip as is with no transitions
-            
             subtitle_clips.append(sub_clip)
+            
+            # Show progress for larger subtitle sets
+            if len(subtitle_data) > 10 and ((i + 1) % 5 == 0 or i == len(subtitle_data) - 1):
+                log_progress(i + 1, len(subtitle_data), prefix="Creating Subtitle Clips:", suffix="Complete")
         
-        # Create a semi-transparent overlay for the entire video
-        overlay = ColorClip(size=base_video.size, color=(0, 0, 0))
-        overlay = overlay.set_opacity(0.15)  # Very subtle darkening
-        overlay = overlay.set_duration(base_video.duration)
+        # Create final video with subtitles (no overlay)
+        log_processing("Compositing final video with centered subtitles")
+        final_video = CompositeVideoClip([base_video] + subtitle_clips)
         
-        # Create final video with subtitles
-        final_video = CompositeVideoClip([base_video, overlay] + subtitle_clips)
-        
-        print(colored("✓ Added subtitles with clean, instant transitions (no fades)", "green"))
+        log_success("Added centered subtitles with clean transitions", "🎬")
         return final_video
     
     except Exception as e:
-        print(colored(f"Error processing subtitles: {str(e)}", "red"))
-        print(colored(traceback.format_exc(), "red"))
+        log_error(f"Error processing subtitles: {str(e)}")
+        log_error(traceback.format_exc())
         return base_video
 
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None, target_duration=None):
     """Generate a video with audio and subtitles"""
     try:
-        print(colored("\n=== Video Generation ===", "blue"))
+        log_section("Video Generation", "🎬")
         
         # Load audio to get duration
         audio = AudioFileClip(audio_path)
         audio_duration = audio.duration
-        print(colored(f"Audio duration: {audio_duration:.2f}s", "cyan"))
+        log_info(f"Audio duration: {audio_duration:.2f}s")
         
         # Use target_duration if provided, otherwise use audio duration plus buffer
         if target_duration:
-            print(colored(f"Using provided target duration: {target_duration:.2f}s", "cyan"))
+            log_info(f"Using provided target duration: {target_duration:.2f}s")
             # IMPORTANT: Slightly reduce the target duration to prevent black fade at end
             video_duration = target_duration - 0.1
-            print(colored(f"Adjusted to {video_duration:.2f}s to prevent black end frame", "cyan"))
+            log_info(f"Adjusted to {video_duration:.2f}s to prevent black end frame")
         else:
             # Add a small buffer to prevent cutting off
             video_duration = audio_duration + 1.9  # 2.0 - 0.1 for end frame fix
-            print(colored(f"Calculated video duration: {video_duration:.2f}s (audio + buffer)", "cyan"))
+            log_info(f"Calculated video duration: {video_duration:.2f}s (audio + buffer)")
         
         # Handle different background path formats
         if isinstance(background_path, list):
             # Multiple background videos
-            print(colored(f"Combining {len(background_path)} background videos", "cyan"))
+            log_info(f"Combining {len(background_path)} background videos", "🔄")
             background_video_path = combine_videos(background_path, audio_duration, video_duration)
             if not background_video_path:
                 raise ValueError("Failed to combine background videos")
             background_video = VideoFileClip(background_video_path)
         else:
             # Single background video
-            print(colored(f"Using single background video: {background_path}", "cyan"))
+            log_info(f"Using single background video: {background_path}")
             background_video = VideoFileClip(background_path)
             
             # Resize and crop to vertical format
+            log_processing("Resizing video to vertical format")
             background_video = resize_to_vertical(background_video)
             
             # Loop if needed to match audio duration
             if background_video.duration < video_duration:
-                print(colored(f"Looping background video ({background_video.duration:.2f}s) to match audio ({video_duration:.2f}s)", "yellow"))
+                log_processing(f"Looping background video ({background_video.duration:.2f}s) to match audio ({video_duration:.2f}s)")
                 background_video = vfx.loop(background_video, duration=video_duration)
             
             # Trim if longer than needed
             if background_video.duration > video_duration:
-                print(colored(f"Trimming background video from {background_video.duration:.2f}s to {video_duration:.2f}s", "yellow"))
+                log_processing(f"Trimming background video from {background_video.duration:.2f}s to {video_duration:.2f}s")
                 background_video = background_video.subclip(0, video_duration)
         
         # Set audio
+        log_processing("Adding audio to video")
         video_with_audio = background_video.set_audio(audio)
         
         # Add subtitles if provided
         if subtitles_path:
-            print(colored("Adding subtitles", "cyan"))
+            log_info("Adding subtitles to video")
             video_with_subtitles = process_subtitles(subtitles_path, video_with_audio)
         else:
+            log_warning("No subtitles provided, skipping subtitle processing")
             video_with_subtitles = video_with_audio
         
         # IMPORTANT: Set exact duration to prevent black frames
         # This ensures the video ends on the last frame without fading to black
         if abs(video_with_subtitles.duration - video_duration) > 0.05:
-            print(colored(f"Setting exact duration to {video_duration:.2f}s", "yellow"))
+            log_warning(f"Setting exact duration to {video_duration:.2f}s", "⏱️")
             video_with_subtitles = video_with_subtitles.set_duration(video_duration)
         
         # Write final video with specific parameters to prevent black frames
         output_path = "temp_output.mp4"
-        print(colored(f"Writing final video to {output_path}", "cyan"))
+        log_section(f"Rendering Final Video", "🎥")
+        log_info(f"Output path: {output_path}")
+        
+        # Show a message about rendering time
+        log_processing("Rendering final video... This may take a while")
+        start_time = time.time()
         
         video_with_subtitles.write_videofile(
             output_path,
@@ -1082,18 +1192,22 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
             ffmpeg_params=["-shortest"]  # This helps prevent extra frames
         )
         
+        elapsed_time = time.time() - start_time
+        log_success(f"Video rendered in {elapsed_time:.1f} seconds", "⏱️")
+        
         # Clean up
+        log_info("Cleaning up resources...")
         background_video.close()
         video_with_audio.close()
         video_with_subtitles.close()
         audio.close()
         
-        print(colored("✓ Video generation complete", "green"))
+        log_success("Video generation complete", "🎉")
         return output_path
         
     except Exception as e:
-        print(colored(f"Error generating video: {str(e)}", "red"))
-        print(colored(traceback.format_exc(), "red"))
+        log_error(f"Error generating video: {str(e)}")
+        log_error(traceback.format_exc())
         return None
 
 def generate_tts_audio(sentences: List[str], voice: str = "nova", style: str = "humorous") -> AudioFileClip:
@@ -1102,12 +1216,16 @@ def generate_tts_audio(sentences: List[str], voice: str = "nova", style: str = "
         # Join all sentences into one script, preserving natural pauses
         full_script = ". ".join(sentence.strip().strip('"') for sentence in sentences)
         
-        print(colored("\n=== Generating TTS Audio ===", "blue"))
-        print(colored(f"Using voice: {voice}", "cyan"))
-        print(colored(f"Full script:", "cyan"))
-        print(colored(f"{full_script}", "yellow"))
+        log_section("Generating TTS Audio", "🔊")
+        log_info(f"Voice: {voice}")
+        log_info(f"Script length: {len(full_script)} characters, {len(sentences)} sentences")
+        
+        # Show a preview of the script (first 100 chars)
+        preview = full_script[:100] + "..." if len(full_script) > 100 else full_script
+        log_info(f"Script preview: {preview}")
         
         # Single API call for the entire script
+        log_processing("Sending request to OpenAI TTS API...")
         client = OpenAI()
         response = client.audio.speech.create(
             model="tts-1",
@@ -1117,17 +1235,19 @@ def generate_tts_audio(sentences: List[str], voice: str = "nova", style: str = "
             response_format="mp3"
         )
         
-        print(colored("✓ Generated voice audio", "green"))
+        log_success("Generated voice audio", "🎙️")
         
         # Save the audio file
         audio_path = "temp/tts/tech_humor_latest.mp3"
         os.makedirs(os.path.dirname(audio_path), exist_ok=True)
         
+        log_processing(f"Saving audio to {audio_path}")
         with open(audio_path, "wb") as f:
             for chunk in response.iter_bytes(chunk_size=4096):
                 f.write(chunk)
         
         # Load and process audio
+        log_processing("Processing audio...")
         audio_clip = AudioFileClip(audio_path)
         
         # Add a small fade out at the end
@@ -1137,12 +1257,12 @@ def generate_tts_audio(sentences: List[str], voice: str = "nova", style: str = "
         duration = audio_clip.duration - 0.1
         audio_clip = audio_clip.subclip(0, duration)
         
-        print(colored(f"✓ Generated TTS audio: {audio_clip.duration:.2f}s", "green"))
+        log_success(f"TTS audio ready: {audio_clip.duration:.2f}s", "✨")
         
         return audio_clip
         
     except Exception as e:
-        print(colored(f"Error generating TTS: {str(e)}", "red"))
+        log_error(f"Error generating TTS: {str(e)}")
         return None
 
 def read_subtitles_file(filename):
@@ -1184,32 +1304,46 @@ def read_subtitles_file(filename):
 def test_single_subtitle():
     """Test function for single subtitle with emojis"""
     try:
+        log_section("Subtitle Test Mode", "🧪")
+        
         # Create a test video clip (dark gray background)
-        test_video = ColorClip(size=(1080, 1920), color=(40, 40, 40)).set_duration(3)
+        log_processing("Creating test background...")
+        test_video = ColorClip(size=(1080, 1920), color=(40, 40, 40)).set_duration(5)
         
         # Create test subtitles file with just one subtitle
+        log_info("Creating test subtitle with emoji...")
         test_srt = """1
-00:00:00,000 --> 00:00:03,000
-Because it turns their 'do not disturb' mode on. 🚫👩‍💻"""
+00:00:00,000 --> 00:00:05,000
+This is a centered subtitle with emoji! 🚀 It should be visible on any background. 🎬"""
 
         # Save test subtitles
         test_srt_path = "../temp/test_single_sub.srt"
         with open(test_srt_path, "w", encoding="utf-8-sig") as f:
             f.write(test_srt)
+        log_success(f"Saved test subtitle to {test_srt_path}")
 
         # Process subtitles
-        print(colored("\n=== Testing Single Subtitle ===", "blue"))
+        log_processing("Processing test subtitle...")
         final_video = process_subtitles(test_srt_path, test_video)
         
         # Save test video
-        output_path = "../temp/single_subtitle_test.mp4"
+        output_path = "../temp/centered_subtitle_test.mp4"
+        log_processing(f"Rendering test video to {output_path}...")
+        start_time = time.time()
+        
         final_video.write_videofile(output_path, fps=30)
         
-        print(colored(f"\n✓ Test video saved to: {output_path}", "green"))
+        elapsed_time = time.time() - start_time
+        log_success(f"Test video rendered in {elapsed_time:.1f} seconds", "⏱️")
+        log_success(f"Test complete! Video saved to: {output_path}", "🎉")
+        
+        # Print instructions for viewing
+        log_info("Open the test video to see the centered subtitle with text outline", "👁️")
+        log_info("The subtitle should be clearly visible in the center of the screen", "📱")
         
     except Exception as e:
-        print(colored(f"Error in subtitle test: {str(e)}", "red"))
-        print(colored(traceback.format_exc(), "red"))
+        log_error(f"Error in subtitle test: {str(e)}")
+        log_error(traceback.format_exc())
 
 def generate_video_thumbnail(script, content_type):
     """Generate a thumbnail for the video using script content"""
@@ -1348,4 +1482,14 @@ def generate_video_thumbnail(script, content_type):
         return None
 
 if __name__ == "__main__":
+    # Display a colorful banner when running directly
+    print("\n")
+    cprint("╔═════════════════════════════════════════════╗", "cyan", attrs=["bold"])
+    cprint("║                                             ║", "cyan", attrs=["bold"])
+    cprint("║  🎬  YOUTUBE SHORTS VIDEO GENERATOR  🎬  ║", "yellow", attrs=["bold"])
+    cprint("║                                             ║", "cyan", attrs=["bold"])
+    cprint("╚═════════════════════════════════════════════╝", "cyan", attrs=["bold"])
+    print("\n")
+    
+    # Run the test function
     test_single_subtitle()
