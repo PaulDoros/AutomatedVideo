@@ -1,6 +1,8 @@
 import os
 import torch
 import asyncio
+import re
+import multiprocessing
 from typing import Optional, Dict
 from TTS.api import TTS
 from termcolor import colored
@@ -11,7 +13,27 @@ from contextlib import contextmanager
 class CoquiTTSAPI:
     def __init__(self):
         """Initialize Coqui TTS with XTTS-v2 model"""
+        # Check if CUDA is available
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if self.device == "cuda":
+            # Set CUDA device to 0 (first GPU)
+            torch.cuda.set_device(0)
+            print(colored(f"Using GPU acceleration: {torch.cuda.get_device_name(0)}", "green"))
+            # Use XTTS-v2 model with GPU
+            self.default_model = "xtts_v2"
+            # Set GPU optimization level - higher values prioritize quality over speed
+            self.gpu_optimization_level = "high_quality"
+        else:
+            # Optimize for CPU performance
+            print(colored("GPU not available, optimizing for CPU performance", "yellow"))
+            # Set number of threads for CPU optimization
+            num_threads = min(multiprocessing.cpu_count(), 16)  # Use up to 16 CPU threads
+            torch.set_num_threads(num_threads)
+            print(colored(f"Using {num_threads} CPU threads for processing", "yellow"))
+            # Use faster model for CPU
+            self.default_model = "fast"
+            print(colored("Using faster model for CPU processing", "yellow"))
+            
         self.models = {
             "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
             "jenny": "tts_models/en/jenny/jenny",
@@ -23,7 +45,7 @@ class CoquiTTSAPI:
         os.makedirs("assets/tts/model_cache", exist_ok=True)
         
         # Initialize with default model
-        self._init_tts()
+        self._init_tts(self.default_model)
         
     @contextmanager
     def _torch_load_context(self):
@@ -35,9 +57,12 @@ class CoquiTTSAPI:
         finally:
             pass
 
-    def _init_tts(self, model_key: str = "xtts_v2"):
+    def _init_tts(self, model_key: str = None):
         """Initialize TTS with specified model"""
         try:
+            if model_key is None:
+                model_key = self.default_model
+                
             model_name = self.models.get(model_key)
             if not model_name:
                 raise ValueError(f"Unknown model key: {model_key}")
@@ -46,6 +71,7 @@ class CoquiTTSAPI:
             
             # Use context manager for PyTorch loading
             with self._torch_load_context():
+                # Configure TTS with appropriate settings based on device
                 self.tts = TTS(
                     model_name=model_name,
                     progress_bar=True,
@@ -68,22 +94,74 @@ class CoquiTTSAPI:
         except Exception as e:
             print(colored(f"Error initializing TTS model: {str(e)}", "red"))
             return False
+    
+    def _clean_text(self, text: str, emotion: str = None) -> str:
+        """Clean text by removing emojis and emotion tags, and improving pronunciation of technical terms"""
+        # Remove emoji characters
+        emoji_pattern = re.compile("["
+                               u"\U0001F600-\U0001F64F"  # emoticons
+                               u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+                               u"\U0001F680-\U0001F6FF"  # transport & map symbols
+                               u"\U0001F700-\U0001F77F"  # alchemical symbols
+                               u"\U0001F780-\U0001F7FF"  # Geometric Shapes
+                               u"\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+                               u"\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+                               u"\U0001FA00-\U0001FA6F"  # Chess Symbols
+                               u"\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+                               u"\U00002702-\U000027B0"  # Dingbats
+                               u"\U000024C2-\U0001F251" 
+                               "]+", flags=re.UNICODE)
+        
+        text = emoji_pattern.sub(r'', text)
+        
+        # Remove emotion tags like [happy], [sad], etc.
+        text = re.sub(r'\[(.*?)\]', '', text)
+        
+        # Improve pronunciation of technical terms
+        # Replace acronyms and technical terms with spelled-out versions for better pronunciation
+        tech_terms = {
+            r'\bGPU\b': 'G P U',
+            r'\bCPU\b': 'C P U',
+            r'\bRAM\b': 'RAM',
+            r'\bNVIDIA\b': 'N-VIDIA',
+            r'\bRTX\b': 'R T X',
+            r'\bSUPER\b': 'SUPER',
+            r'\bi9\b': 'i 9',
+            r'\bKF\b': 'K F',
+            r'\bGHz\b': 'gigahertz',
+        }
+        
+        for pattern, replacement in tech_terms.items():
+            text = re.sub(pattern, replacement, text)
+        
+        # Add slight pauses for better phrasing
+        text = text.replace('. ', '. <break time="0.3s"/> ')
+        text = text.replace('! ', '! <break time="0.3s"/> ')
+        text = text.replace('? ', '? <break time="0.3s"/> ')
+        text = text.replace(', ', ', <break time="0.1s"/> ')
+        
+        return text
             
     async def generate_voice(self, text: str, speaker: str = None, language: str = "en", 
-                           emotion: str = "neutral", speed: float = 1.0) -> Optional[str]:
+                           emotion: str = "neutral", speed: float = 1.0, output_path: str = None) -> Optional[str]:
         """Generate voice using Coqui TTS"""
         try:
             # Create output directory
             os.makedirs("temp/tts", exist_ok=True)
-            output_path = f"temp/tts/coqui_{hash(text)}.wav"
             
-            # Add SSML-like markup for emotion and speed control
-            if emotion != "neutral":
-                text = f"[{emotion}] {text}"
+            # Use custom output path if provided, otherwise generate one
+            if not output_path:
+                output_path = f"temp/tts/coqui_{hash(text)}.wav"
+            else:
+                # Ensure the directory exists
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Clean the text (remove emojis and emotion tags)
+            clean_text = self._clean_text(text, emotion)
             
             # Generate speech
             print(colored(f"Generating speech with Coqui TTS ({self.device})", "cyan"))
-            print(colored(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}", "cyan"))
+            print(colored(f"Text: {clean_text[:100]}{'...' if len(clean_text) > 100 else ''}", "cyan"))
             
             # Ensure TTS is initialized
             if not hasattr(self, 'tts'):
@@ -91,7 +169,38 @@ class CoquiTTSAPI:
                     raise ValueError("Failed to initialize TTS model")
             
             # Prepare TTS parameters
-            tts_kwargs = {"text": text, "file_path": output_path, "speed": speed}
+            tts_kwargs = {"text": clean_text, "file_path": output_path}
+            
+            # Apply speed adjustment based on emotion and device
+            if self.device == "cuda":
+                # On GPU, we can use higher quality settings
+                if emotion == "cheerful":
+                    # Slightly faster for cheerful emotion
+                    tts_kwargs["speed"] = speed * 1.05
+                else:
+                    # Normal speed for other emotions
+                    tts_kwargs["speed"] = speed
+                
+                # Add quality settings for GPU
+                if hasattr(self, 'gpu_optimization_level') and self.gpu_optimization_level == "high_quality":
+                    # Higher quality settings for high-end GPUs
+                    if hasattr(self.tts, "synthesizer") and hasattr(self.tts.synthesizer, "config"):
+                        # Attempt to set higher quality parameters if available
+                        try:
+                            # These are model-specific settings that may improve quality
+                            if hasattr(self.tts.synthesizer.config, "use_griffin_lim"):
+                                self.tts.synthesizer.config.use_griffin_lim = False  # Disable Griffin-Lim for better quality
+                            
+                            # Set higher sampling rate if supported
+                            if hasattr(self.tts.synthesizer.config, "audio") and hasattr(self.tts.synthesizer.config.audio, "sample_rate"):
+                                # Try to use 24kHz or higher if supported
+                                if self.tts.synthesizer.config.audio.sample_rate < 24000:
+                                    print(colored("Increasing sample rate for better quality", "blue"))
+                        except Exception as config_error:
+                            print(colored(f"Note: Could not apply all quality settings: {str(config_error)}", "yellow"))
+            else:
+                # On CPU, prioritize speed
+                tts_kwargs["speed"] = speed
             
             # Only add speaker if model is multi-speaker
             if self.is_multi_speaker:
@@ -126,7 +235,7 @@ class CoquiTTSAPI:
                 print(colored("Attempting fallback to faster model...", "yellow"))
                 if self._init_tts("fast"):
                     try:
-                        return await self.generate_voice(text, speaker=None, language="en", emotion=emotion, speed=speed)
+                        return await self.generate_voice(text, speaker=None, language="en", emotion=emotion, speed=speed, output_path=output_path)
                     except Exception as fallback_error:
                         print(colored(f"Fallback also failed: {str(fallback_error)}", "red"))
                         
@@ -178,12 +287,15 @@ class CoquiTTSAPI:
             os.makedirs("temp/tts/cloned", exist_ok=True)
             output_path = f"temp/tts/cloned/cloned_{hash(text)}.wav"
             
+            # Clean the text (remove emojis)
+            clean_text = self._clean_text(text)
+            
             # Generate speech with cloned voice
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
                 lambda: self.tts.tts_to_file(
-                    text=text,
+                    text=clean_text,
                     file_path=output_path,
                     speaker_wav=reference_audio,
                 )

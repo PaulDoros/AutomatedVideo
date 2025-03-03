@@ -29,13 +29,12 @@ from pydub import AudioSegment
 import openai
 
 # Third-party imports
-
 from TTS.api import TTS
-
-
 import torch
-
 from scipy.io import wavfile
+
+# Import voice diversification system
+from voice_diversification import VoiceDiversification
 
 
 class AudioManager:
@@ -67,8 +66,21 @@ class AudioManager:
             }
         }
         
+        # Initialize voice diversification system
+        self.voice_diversifier = VoiceDiversification()
+        
         self.voiceovers_dir = "temp/tts"
         os.makedirs(self.voiceovers_dir, exist_ok=True)
+        
+        # Map content types to emotions
+        self.content_emotions = {
+            'tech_humor': ['cheerful', 'friendly'],
+            'ai_money': ['professional', 'serious'],
+            'baby_tips': ['friendly', 'cheerful'],
+            'quick_meals': ['cheerful', 'friendly'],
+            'fitness_motivation': ['professional', 'serious'],
+            'default': ['neutral', 'friendly']
+        }
 
     def select_voice(self, channel_type):
         """Select appropriate voice based on content type"""
@@ -86,6 +98,33 @@ class AudioManager:
                 return voice, channel_config['style']
         
         return list(voices.keys())[0], channel_config['style']
+        
+    def select_coqui_voice(self, channel_type, gender=None):
+        """Select a Coqui TTS voice based on content type"""
+        # Get appropriate emotion for the content type
+        emotions = self.content_emotions.get(channel_type, self.content_emotions['default'])
+        emotion = random.choice(emotions)
+        
+        # Check if the model supports multiple speakers
+        has_speaker_support = hasattr(self.voice_diversifier.api, 'speakers') and self.voice_diversifier.api.speakers
+        
+        if not has_speaker_support:
+            # If no speaker support, just return None for voice and the selected emotion
+            return None, emotion
+        
+        # Determine gender preference based on content type if not specified
+        if gender is None:
+            if channel_type == 'baby_tips':
+                gender = 'female'  # Prefer female voices for baby tips
+            elif channel_type == 'fitness_motivation':
+                gender = 'male'    # Prefer male voices for fitness motivation
+            # For other content types, leave gender as None for random selection
+        
+        # Get a random voice based on gender preference
+        voice = self.voice_diversifier.get_random_voice(gender)
+        
+        print(colored(f"Selected Coqui voice: {voice} (emotion: {emotion})", "blue"))
+        return voice, emotion
 
     def enhance_audio(self, audio_segment):
         """Enhance audio quality"""
@@ -158,51 +197,11 @@ class VideoGenerator:
         
         self._create_directories()
 
-        # Check required packages
-        if None in (TTS, torch, wavfile):
-            raise ImportError(
-                "Missing required packages. Please install:\n"
-                "pip install TTS torch scipy"
-            )
-
-        # Initialize Coqui TTS only once
-        tts_model_path = "assets/tts/model"
-        os.makedirs(os.path.dirname(tts_model_path), exist_ok=True)
-
-        # Fix PyTorch "weights only" issue
-        torch.serialization.default_load_weights_only = False
-        torch.serialization.add_safe_globals(["numpy.core.multiarray.scalar"])
-
-        # Define voice model
-        MODEL_NAME = "tts_models/en/vctk/vits"
+        # Initialize audio manager for voice selection
+        self.audio_manager = AudioManager()
         
-        print(colored("Loading TTS model...", "blue"))
-        self.tts = TTS(
-            model_name=MODEL_NAME,
-            progress_bar=False,
-            gpu=torch.cuda.is_available()
-        )
-        
-        # Set speaker for multi-speaker model
-        if hasattr(self.tts, 'speakers') and len(self.tts.speakers) > 0:
-            self.tts.speaker = "p273"  # Male voice with good clarity
-
-        # Define available voices for variety
-        self.voice_options = {
-            'male_professional': ['p226', 'p227', 'p232'],
-            'male_casual': ['p273', 'p274', 'p276'],
-            'female_professional': ['p238', 'p243', 'p244'],
-            'female_casual': ['p248', 'p251', 'p294'],
-        }
-        
-        # Map channels to voice types
-        self.channel_voices = {
-            'tech_humor': ['male_casual', 'female_casual'],
-            'ai_money': ['male_professional', 'female_professional'],
-            'baby_tips': ['female_casual', 'female_professional'],
-            'quick_meals': ['female_casual', 'male_casual'],
-            'fitness_motivation': ['male_professional', 'male_casual']
-        }
+        # Flag to use Coqui TTS instead of OpenAI TTS
+        self.use_coqui_tts = True
 
     def _create_directories(self):
         """Create all necessary directories"""
@@ -399,19 +398,96 @@ class VideoGenerator:
             return False
 
     async def _generate_tts(self, script, channel_type):
-        """Generate TTS using OpenAI's voice with a single API call"""
+        """Generate TTS using either Coqui TTS or OpenAI's voice"""
         try:
-            audio_manager = AudioManager()
-            voice, style = audio_manager.select_voice(channel_type)
-            
-            print(colored(f"Using OpenAI voice: {voice} (style: {style})", "blue"))
-            
-            # Clean up the script - remove line numbers and preserve emojis
+            # Clean up the script - remove line numbers and preserve emojis for display
+            # but the actual TTS will have emojis removed by the _clean_text method
             clean_script = '\n'.join(
                 line.strip().strip('"') 
                 for line in script.split('\n') 
                 if line.strip() and not line[0].isdigit()
             )
+            
+            # Use Coqui TTS for diverse voices
+            if self.use_coqui_tts:
+                try:
+                    # Select appropriate emotion for the content type
+                    # (voice selection will be handled by the API based on whether the model supports speakers)
+                    _, emotion = self.audio_manager.select_coqui_voice(channel_type)
+                    
+                    # Create unique filename based on channel type and emotion
+                    filename = f"{channel_type}_{emotion}_{int(time.time())}.wav"
+                    output_path = f"temp/tts/{filename}"
+                    
+                    # Check if the model supports multiple speakers
+                    has_speaker_support = hasattr(self.audio_manager.voice_diversifier.api, 'speakers') and self.audio_manager.voice_diversifier.api.speakers
+                    
+                    if has_speaker_support:
+                        # Get a voice if the model supports it
+                        voice, _ = self.audio_manager.select_coqui_voice(channel_type)
+                        print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion})", "blue"))
+                        
+                        # Generate voice using the Coqui TTS API with speaker
+                        result = await self.audio_manager.voice_diversifier.api.generate_voice(
+                            text=clean_script,
+                            speaker=voice,
+                            language="en",
+                            emotion=emotion,
+                            speed=1.1 if emotion == "cheerful" else 1.0,
+                            output_path=output_path
+                        )
+                    else:
+                        # Use default voice with emotion if the model doesn't support multiple speakers
+                        print(colored(f"Using Coqui TTS default voice (emotion: {emotion})", "blue"))
+                        
+                        # Generate voice using the Coqui TTS API without speaker
+                        result = await self.audio_manager.voice_diversifier.api.generate_voice(
+                            text=clean_script,
+                            language="en",
+                            emotion=emotion,
+                            speed=1.1 if emotion == "cheerful" else 1.0,
+                            output_path=output_path
+                        )
+                    
+                    if result:
+                        # Convert WAV to MP3 for compatibility with video generation
+                        final_path = f"temp/tts/{channel_type}_latest.mp3"
+                        
+                        # Use moviepy to convert WAV to MP3
+                        audio_clip = AudioFileClip(result)
+                        audio_clip.write_audiofile(final_path)
+                        audio_clip.close()
+                        
+                        print(colored(f"✓ Generated TTS audio with Coqui: {final_path}", "green"))
+                        return final_path
+                    else:
+                        raise Exception("Failed to generate voice with Coqui TTS")
+                except Exception as coqui_error:
+                    # Fallback to OpenAI TTS if Coqui fails
+                    print(colored(f"Coqui TTS failed: {str(coqui_error)}", "yellow"))
+                    print(colored("Falling back to OpenAI TTS", "yellow"))
+                    return await self._generate_openai_tts(clean_script, channel_type)
+            else:
+                # Use OpenAI TTS
+                return await self._generate_openai_tts(clean_script, channel_type)
+            
+        except Exception as e:
+            print(colored(f"TTS generation failed: {str(e)}", "red"))
+            # Try fallback to OpenAI TTS
+            if self.use_coqui_tts:
+                print(colored("Falling back to OpenAI TTS", "yellow"))
+                try:
+                    return await self._generate_openai_tts(clean_script, channel_type)
+                except Exception as fallback_error:
+                    print(colored(f"Fallback TTS also failed: {str(fallback_error)}", "red"))
+            return None
+            
+    async def _generate_openai_tts(self, clean_script, channel_type):
+        """Generate TTS using OpenAI's voice API"""
+        try:
+            voice, style = self.audio_manager.select_voice(channel_type)
+            
+            print(colored(f"Using OpenAI voice: {voice} (style: {style})", "blue"))
             
             # Make a single API call for the entire script
             client = openai.OpenAI()
@@ -443,11 +519,11 @@ class VideoGenerator:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             
-            print(colored(f"✓ Generated TTS audio and trimmed 0.1s from end", "green"))
+            print(colored(f"✓ Generated TTS audio with OpenAI and trimmed 0.1s from end", "green"))
             return final_path
             
         except Exception as e:
-            print(colored(f"TTS generation failed: {str(e)}", "red"))
+            print(colored(f"OpenAI TTS generation failed: {str(e)}", "red"))
             return None
 
     async def _generate_subtitles(self, script: str, tts_path: str, channel_type: str) -> str:
