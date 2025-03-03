@@ -115,30 +115,39 @@ def generate_response(prompt: str, ai_model: str) -> str:
         return generate_response(prompt, "gpt-3.5-turbo-1106")
 
 def generate_script(video_subject: str, paragraph_number: int, ai_model: str, voice: str, customPrompt: str) -> str:
-
     """
     Generate a script for a video, depending on the subject of the video, the number of paragraphs, and the AI model.
 
-
-
     Args:
-
         video_subject (str): The subject of the video.
-
         paragraph_number (int): The number of paragraphs to generate.
-
         ai_model (str): The AI model to use for generation.
-
-
+        voice (str): The voice to use for TTS.
+        customPrompt (str): Custom prompt to use instead of default.
 
     Returns:
-
         str: The script for the video.
-
     """
+    # Check if using DeepSeek
+    if ai_model.lower() == "deepseek":
+        try:
+            from deepseek_integration import DeepSeekAPI
+            import asyncio
+            
+            deepseek = DeepSeekAPI()
+            success, script = asyncio.run(deepseek.generate_script(video_subject, paragraph_number, customPrompt))
+            
+            if success and script:
+                print(colored(script, "cyan"))
+                return script
+            else:
+                print(colored("[-] DeepSeek script generation failed, falling back to OpenAI.", "yellow"))
+                # Fall through to OpenAI
+        except Exception as e:
+            print(colored(f"[-] Error with DeepSeek: {str(e)}, falling back to OpenAI.", "yellow"))
+            # Fall through to OpenAI
 
-    # Build prompt
-    
+    # Build prompt for OpenAI
     if customPrompt:
         prompt = customPrompt
     else:
@@ -159,7 +168,6 @@ def generate_script(video_subject: str, paragraph_number: int, ai_model: str, vo
             YOU MUST NOT INCLUDE ANY TYPE OF MARKDOWN OR FORMATTING IN THE SCRIPT, NEVER USE A TITLE.
             YOU MUST WRITE THE SCRIPT IN THE LANGUAGE SPECIFIED IN [LANGUAGE].
             ONLY RETURN THE RAW CONTENT OF THE SCRIPT. DO NOT INCLUDE "VOICEOVER", "NARRATOR" OR SIMILAR INDICATORS OF WHAT SHOULD BE SPOKEN AT THE BEGINNING OF EACH PARAGRAPH OR LINE. YOU MUST NOT MENTION THE PROMPT, OR ANYTHING ABOUT THE SCRIPT ITSELF. ALSO, NEVER TALK ABOUT THE AMOUNT OF PARAGRAPHS OR LINES. JUST WRITE THE SCRIPT.
-
         """
 
     prompt += f"""

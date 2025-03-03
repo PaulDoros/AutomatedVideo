@@ -1210,59 +1210,89 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         log_error(traceback.format_exc())
         return None
 
-def generate_tts_audio(sentences: List[str], voice: str = "nova", style: str = "humorous") -> AudioFileClip:
-    """Generate text-to-speech audio for the entire script at once"""
+def generate_tts_audio(script: str, voice: str = "en_us_001", content_type: str = None) -> str:
+    """Generate TTS audio from script"""
     try:
-        # Join all sentences into one script, preserving natural pauses
-        full_script = ". ".join(sentence.strip().strip('"') for sentence in sentences)
+        # Check if using DeepSeek voice
+        if voice.startswith("deepseek_"):
+            try:
+                from deepseek_integration import DeepSeekAPI
+                import asyncio
+                
+                deepseek = DeepSeekAPI()
+                voice_id = voice.replace("deepseek_", "")  # Extract DeepSeek voice ID
+                audio_path = asyncio.run(deepseek.generate_voice(script, voice_id))
+                
+                if audio_path:
+                    print(colored("✓ Generated TTS audio using DeepSeek", "green"))
+                    return audio_path
+                else:
+                    print(colored("[-] DeepSeek TTS failed, falling back to Coqui TTS", "yellow"))
+            except Exception as e:
+                print(colored(f"[-] Error with DeepSeek TTS: {str(e)}, falling back to Coqui TTS", "yellow"))
+
+        # Try Coqui TTS first
+        try:
+            from coqui_integration import CoquiTTSAPI
+            import asyncio
+            
+            coqui = CoquiTTSAPI()
+            
+            # Map TikTok voices to Coqui speakers/languages
+            voice_mapping = {
+                "en_us_001": ("xtts_v2", "en"),  # Default English
+                "en_us_002": ("jenny", "en"),     # Jenny voice
+                "en_male_funny": ("vits", "en"),  # VITS male voice
+                "en_male_narration": ("xtts_v2", "en"),  # XTTS male voice
+                "en_female_emotional": ("xtts_v2", "en")  # XTTS female voice
+            }
+            
+            # Get model and language from mapping or use defaults
+            model, language = voice_mapping.get(voice, ("xtts_v2", "en"))
+            
+            # Determine emotion from content type
+            emotion_mapping = {
+                "tech_humor": "cheerful",
+                "life_hack": "friendly",
+                "coding_tips": "professional",
+                "food_recipe": "warm",
+                "fitness_motivation": "energetic"
+            }
+            emotion = emotion_mapping.get(content_type, "neutral")
+            
+            # Generate audio with Coqui TTS
+            audio_path = asyncio.run(coqui.generate_voice(
+                text=script,
+                speaker=None,  # Let the model choose best speaker
+                language=language,
+                emotion=emotion
+            ))
+            
+            if audio_path:
+                print(colored("✓ Generated TTS audio using Coqui", "green"))
+                return audio_path
+            else:
+                print(colored("[-] Coqui TTS failed, falling back to TikTok TTS", "yellow"))
+                
+        except Exception as e:
+            print(colored(f"[-] Error with Coqui TTS: {str(e)}, falling back to TikTok TTS", "yellow"))
+
+        # Create temp directory if it doesn't exist
+        os.makedirs("temp/tts", exist_ok=True)
+        output_path = f"temp/tts/{content_type}_latest.mp3"
+
+        # Fallback to TikTok TTS
+        success = tts(script, voice, output_path)
         
-        log_section("Generating TTS Audio", "🔊")
-        log_info(f"Voice: {voice}")
-        log_info(f"Script length: {len(full_script)} characters, {len(sentences)} sentences")
-        
-        # Show a preview of the script (first 100 chars)
-        preview = full_script[:100] + "..." if len(full_script) > 100 else full_script
-        log_info(f"Script preview: {preview}")
-        
-        # Single API call for the entire script
-        log_processing("Sending request to OpenAI TTS API...")
-        client = OpenAI()
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=full_script,
-            speed=0.95,  # Slightly slower for better clarity
-            response_format="mp3"
-        )
-        
-        log_success("Generated voice audio", "🎙️")
-        
-        # Save the audio file
-        audio_path = "temp/tts/tech_humor_latest.mp3"
-        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
-        
-        log_processing(f"Saving audio to {audio_path}")
-        with open(audio_path, "wb") as f:
-            for chunk in response.iter_bytes(chunk_size=4096):
-                f.write(chunk)
-        
-        # Load and process audio
-        log_processing("Processing audio...")
-        audio_clip = AudioFileClip(audio_path)
-        
-        # Add a small fade out at the end
-        audio_clip = audio_clip.audio_fadeout(0.5)
-        
-        # Trim any silence at the end
-        duration = audio_clip.duration - 0.1
-        audio_clip = audio_clip.subclip(0, duration)
-        
-        log_success(f"TTS audio ready: {audio_clip.duration:.2f}s", "✨")
-        
-        return audio_clip
-        
+        if success:
+            print(colored("✓ Generated TTS audio using TikTok", "green"))
+            return output_path
+        else:
+            print(colored("[-] Failed to generate TTS audio", "red"))
+            return None
+
     except Exception as e:
-        log_error(f"Error generating TTS: {str(e)}")
+        print(colored(f"[-] Error generating TTS audio: {str(e)}", "red"))
         return None
 
 def read_subtitles_file(filename):
