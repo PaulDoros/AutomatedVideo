@@ -986,10 +986,10 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
             last_sub = processed_subtitles[-1]
             video_end = base_video.duration
             
-            # If the last subtitle ends before the video, extend it
-            if last_sub['end'] < video_end - 0.5:  # Leave a small buffer at the end
-                log_success("Extended final subtitle until end of video")
-                last_sub['end'] = video_end - 0.2  # Small buffer at the very end
+            # Always extend the last subtitle to the full end of the video
+            # This ensures it stays on screen until the very end
+            log_success("Extended final subtitle until end of video")
+            last_sub['end'] = video_end  # No buffer at the end, stay until the very last frame
         
         # Apply start padding offset to all subtitles
         if start_padding > 0:
@@ -1085,7 +1085,8 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         if target_duration:
             log_info(f"Using provided target duration: {target_duration:.2f}s")
             # IMPORTANT: Slightly reduce the target duration to prevent black fade at end
-            video_duration = target_duration - 0.1
+            # Using a smaller adjustment to minimize the gap at the end
+            video_duration = target_duration - 0.05
             log_info(f"Adjusted to {video_duration:.2f}s to prevent black end frame")
         
         # Handle different background path formats
