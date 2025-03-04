@@ -284,50 +284,83 @@ async def generate_and_upload():
         
         print(colored(f"\n=== Completed {channel} ===", "green"))
 
-async def main():
-    """Main function with command line arguments"""
-    parser = argparse.ArgumentParser(description='YouTube Shorts Automation System')
+def parse_args():
+    parser = argparse.ArgumentParser(description='Generate and upload YouTube Shorts videos')
     
-    # Add arguments
-    parser.add_argument('--generate', action='store_true', help='Generate and upload content for all channels')
-    parser.add_argument('--schedule', type=int, default=0, help='Generate posting schedule for X days')
-    parser.add_argument('--process', type=int, default=0, help='Process scheduled uploads for next X hours')
+    # Content generation options
+    parser.add_argument('--generate', action='store_true', help='Generate new content')
+    parser.add_argument('--channel', type=str, choices=['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation'], 
+                        help='Specific channel to generate content for')
+    parser.add_argument('--topic', type=str, help='Specific topic to generate content about')
+    
+    # Scheduling options
+    parser.add_argument('--schedule', type=int, help='Generate posting schedule for the next N days')
+    parser.add_argument('--process', type=int, help='Process scheduled uploads for the next N hours')
+    
+    # Analysis options
     parser.add_argument('--analyze', action='store_true', help='Analyze performance of all channels')
     parser.add_argument('--monitor', action='store_true', help='Monitor content across all channels')
-    parser.add_argument('--channel', type=str, help='Specify a single channel to process')
-    parser.add_argument('--topic', type=str, help='Specify a topic for content generation')
     
-    args = parser.parse_args()
+    # Maintenance options
+    parser.add_argument('--cleanup', action='store_true', help='Clean up video library to prevent excessive accumulation')
+    parser.add_argument('--max-videos', type=int, default=20, help='Maximum number of videos to keep per channel during cleanup')
+    parser.add_argument('--days-to-keep', type=int, default=30, help='Keep videos newer than this many days during cleanup')
     
-    # If no arguments provided, show help
-    if not any(vars(args).values()):
-        parser.print_help()
-        return
+    return parser.parse_args()
+
+def main():
+    args = parse_args()
     
-    # Process arguments
+    # Initialize database
+    db = VideoDatabase()
+    
+    # Initialize sessions for all channels
+    sessions = {}
+    CHANNELS = ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
+    for channel in CHANNELS:
+        try:
+            sessions[channel] = YouTubeSessionManager(channel)
+            print(colored(f"Initialized session for {channel}", "green"))
+        except Exception as e:
+            print(colored(f"Failed to initialize session for {channel}: {str(e)}", "red"))
+    
     if args.generate:
+        # Generate content for a specific channel or all channels
         if args.channel:
-            # Generate for a single channel
-            topic = args.topic or None
-            video_details = await generate_content(args.channel, topic)
-            
-            if video_details:
-                await upload_content(video_details)
+            generate_content_for_channel(args.channel, args.topic)
         else:
-            # Generate for all channels
-            await generate_and_upload()
+            for channel in CHANNELS:
+                generate_content_for_channel(channel)
     
-    if args.schedule > 0:
-        await generate_schedule(days=args.schedule)
-    
-    if args.process > 0:
-        await process_scheduled_uploads(hours=args.process)
-    
-    if args.analyze:
-        await analyze_performance()
-    
-    if args.monitor:
-        await monitor_content()
+    elif args.schedule:
+        # Generate posting schedule for the next N days
+        scheduler = VideoScheduler(db)
+        scheduler.generate_schedule(args.schedule)
+        
+    elif args.process:
+        # Process scheduled uploads for the next N hours
+        process_scheduled_uploads(args.process, sessions, db)
+        
+    elif args.analyze:
+        # Analyze performance of all channels
+        analyzer = PerformanceAnalyzer(db)
+        analyzer.analyze_all_channels()
+        
+    elif args.monitor:
+        # Monitor content across all channels
+        monitor = ContentMonitor(db)
+        monitor.check_all_channels()
+        
+    elif args.cleanup:
+        # Clean up video library
+        print(colored(f"Cleaning up video library (max {args.max_videos} videos per channel, keeping videos newer than {args.days_to_keep} days)", "blue"))
+        video_gen = VideoGenerator()
+        for channel in CHANNELS:
+            video_gen.cleanup_video_library(channel, max_videos=args.max_videos, days_to_keep=args.days_to_keep)
+        print(colored("Video library cleanup complete", "green"))
+        
+    else:
+        print("No action specified. Use --generate, --schedule, --process, --analyze, --monitor, or --cleanup")
 
 if __name__ == "__main__":
     asyncio.run(main()) 

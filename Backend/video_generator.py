@@ -27,6 +27,8 @@ import uuid
 import re
 from pydub import AudioSegment
 import openai
+import glob
+import traceback
 
 # Third-party imports
 from TTS.api import TTS
@@ -326,177 +328,66 @@ class VideoGenerator:
         return os.path.join(music_dir, random.choice(music_files))
 
     async def create_video(self, script_file, channel_type):
+        """Create a video from a script file"""
         try:
             print(colored("\n=== Video Generation Started ===", "blue"))
             
-            # Load script
-            with open(script_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                script = data.get('script', '')
-            
-            if not script:
-                raise ValueError("Script is empty")
-                
             # Create necessary directories
-            print(colored("✓ Directory structure created", "green"))
+            self._create_directories()
+            
+            # Load script from file
+            with open(script_file, 'r', encoding='utf-8') as f:
+                script_data = json.load(f)
+                
+            # Extract script text
+            if isinstance(script_data, dict) and 'script' in script_data:
+                script = script_data['script']
+            else:
+                script = script_data
+                
+            # Select voice based on channel type
+            voice = self.get_voice_for_channel(channel_type)
+            print(colored(f"Selected voice: {voice}", "green"))
             
             # Generate TTS audio
             tts_path = await self._generate_tts(script, channel_type)
             if not tts_path:
-                raise ValueError("Failed to generate TTS audio")
-            
-            # Trim the end of the audio to remove strange sounds (0.3 seconds from the end)
-            # This helps prevent the audio looping issue
-            print(colored("Trimming 0.3 seconds from the end of audio to remove artifacts and prevent looping", "blue"))
-            original_audio = AudioFileClip(tts_path)
-            
-            # Ensure we don't trim too much if the audio is short
-            trim_amount = min(0.3, original_audio.duration * 0.02)  # Either 0.3s or 2% of duration, whichever is smaller
-            trimmed_audio = original_audio.subclip(0, original_audio.duration - trim_amount)
-            
-            # Add 1-second silence at the beginning of the audio to match subtitle delay
-            print(colored("Adding 1-second silence at the beginning of audio to match subtitle delay", "blue"))
-            
-            # Create 1 second of silence with the same parameters as the original audio
-            silence_duration = 1.0
-            silence = AudioClip(lambda t: 0, duration=silence_duration)
-            
-            # Add a small silence at the end to prevent audio loop issues
-            end_silence = AudioClip(lambda t: 0, duration=0.5)
-            
-            # Concatenate silence at beginning, trimmed audio, and silence at end
-            delayed_audio = concatenate_audioclips([silence, trimmed_audio, end_silence])
-            
-            # Save the delayed audio to a temporary file
-            delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
-            delayed_audio.write_audiofile(delayed_audio_path)
-            
-            # Close the audio clips to free resources
-            original_audio.close()
-            trimmed_audio.close()
-            delayed_audio.close()
-            
-            # Use the delayed audio for the rest of the process
-            tts_path = delayed_audio_path
+                print(colored("Failed to generate TTS audio", "red"))
+                return None
                 
-            # Get audio duration for video length calculation
-            audio_clip = AudioFileClip(tts_path)
-            audio_duration = audio_clip.duration
-            audio_clip.close()
-            
-            print(colored(f"Original audio duration: {audio_duration:.2f}s", "blue"))
-            
-            # Calculate target duration with padding
-            start_padding = 1.0  # 1 second at start (already added to audio)
-            end_padding = 3.0    # 3 seconds at end (increased from 2 to 3 seconds)
-            target_duration = audio_duration + end_padding  # Start padding already included in audio
-            print(colored(f"Video duration: {target_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)", "blue"))
-            
-            # Generate subtitles with proper timing
-            subtitles_path = await self._generate_subtitles(script, tts_path, channel_type)
-            if not subtitles_path:
-                raise ValueError("Failed to generate subtitles")
+            # Generate subtitles
+            subtitle_path = await self._generate_subtitles(script, tts_path, channel_type)
+            if not subtitle_path:
+                print(colored("Failed to generate subtitles", "red"))
+                return None
                 
             # Process background videos
             background_videos = await self._process_background_videos(channel_type, script)
-            
-            # Generate video
-            from video import generate_video
-            video = generate_video(
-                background_path=background_videos,
-                audio_path=tts_path,
-                subtitles_path=subtitles_path,
-                content_type=channel_type,
-                target_duration=target_duration
-            )
-            
-            if not video:
-                raise ValueError("Failed to generate video")
+            if not background_videos:
+                print(colored("Failed to process background videos", "red"))
+                return None
                 
-            # Write final video with specific parameters to prevent black frames
-            temp_video_path = "temp/temp_video_no_audio.mp4"
-            temp_audio_path = "temp/temp_audio.mp3"
-            output_path = "temp_output.mp4"
+            # Generate video
+            output_path = await self._generate_video(tts_path, subtitle_path, background_videos, channel_type)
+            if not output_path:
+                print(colored("Failed to generate video", "red"))
+                return None
+                
+            # Clean up temporary files
+            self.cleanup_temp_files()
             
-            print(colored(f"\n=== 🎥 Rendering Final Video 🎥 ===", "blue"))
-            print(colored(f"ℹ️ Output path: {output_path}", "cyan"))
+            # Clean up video library to prevent excessive accumulation
+            # Only keep 20 videos per channel, and always keep videos newer than 30 days
+            self.cleanup_video_library(channel_type, max_videos=20, days_to_keep=30)
             
-            # Show a message about rendering time
-            print(colored("⏳ Rendering final video... This may take a while", "cyan"))
-            start_time = time.time()
+            print(colored("\n=== Video Generation Complete ===", "blue"))
             
-            # Step 1: Extract the audio - handle both simple AudioFileClip and CompositeAudioClip
-            if hasattr(video, 'audio') and video.audio is not None:
-                # Check if it's a CompositeAudioClip (which doesn't have fps)
-                if isinstance(video.audio, CompositeAudioClip):
-                    # Create a new audio file directly from the source
-                    source_audio = AudioFileClip(tts_path)
-                    source_audio.write_audiofile(temp_audio_path)
-                    source_audio.close()
-                else:
-                    # It's a regular AudioFileClip
-                    video.audio.write_audiofile(temp_audio_path)
-            else:
-                # If no audio in video, use the original TTS file
-                shutil.copy2(tts_path, temp_audio_path)
-            
-            # Step 2: Write the video without audio
-            video.without_audio().write_videofile(
-                temp_video_path,
-                codec='libx264',
-                fps=30,
-                preset='ultrafast',
-                ffmpeg_params=["-vf", "format=yuv420p"]
-            )
-            
-            # Step 3: Combine video and audio using ffmpeg directly
-            # IMPORTANT: Removed the -shortest flag to ensure the full video duration is preserved
-            import subprocess
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", temp_video_path,
-                "-i", temp_audio_path,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-map", "0:v:0",  # Use the entire video track
-                "-map", "1:a:0",  # Use the entire audio track
-                "-af", "afade=t=out:st=" + str(audio_duration - 0.5) + ":d=0.5",  # Add fade out to audio
-                output_path
-            ]
-            subprocess.run(cmd, check=True)
-            
-            elapsed_time = time.time() - start_time
-            print(colored(f"⏱️ Video rendered in {elapsed_time:.1f} seconds", "cyan"))
-            
-            # Clean up
-            print(colored("ℹ️ Cleaning up resources...", "cyan"))
-            try:
-                video.close()
-                if os.path.exists(temp_video_path):
-                    os.remove(temp_video_path)
-                if os.path.exists(temp_audio_path):
-                    os.remove(temp_audio_path)
-            except Exception as e:
-                print(colored(f"Warning: Error during cleanup: {str(e)}", "yellow"))
-            
-            # Create timestamped output path
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            final_output_path = f"output/videos/{channel_type}_{timestamp}.mp4"
-            
-            # Create latest output path
-            latest_path = f"output/videos/{channel_type}_latest.mp4"
-            
-            # Copy to output directory
-            os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
-            shutil.copy2(output_path, final_output_path)
-            shutil.copy2(output_path, latest_path)
-            
-            print(colored("\n=== Video Generation Complete ===", "green"))
-            return True
+            return output_path
             
         except Exception as e:
-            print(colored(f"\n=== Video Generation Failed ===\nError: {str(e)}", "red"))
-            return False
+            print(colored(f"Error creating video: {str(e)}", "red"))
+            traceback.print_exc()
+            return None
 
     async def _generate_tts(self, script, channel_type):
         """Generate TTS using either Coqui TTS or OpenAI's voice"""
@@ -905,7 +796,7 @@ class VideoGenerator:
             return None
 
     async def _process_background_videos(self, channel_type, script=None):
-        """Process background videos for the channel - now with multiple video support"""
+        """Process background videos for the channel - now with smart video management"""
         try:
             print(colored("\n=== Processing Background Videos ===", "blue"))
             
@@ -913,49 +804,97 @@ class VideoGenerator:
             video_dir = os.path.join("assets", "videos", channel_type)
             os.makedirs(video_dir, exist_ok=True)
             
-            # Check if we have local videos first
-            local_videos = [os.path.join(video_dir, f) for f in os.listdir(video_dir) 
-                           if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(video_dir, f)) > 0]
+            # Create a directory for categorized videos
+            categorized_dir = os.path.join("assets", "videos", "categorized")
+            os.makedirs(categorized_dir, exist_ok=True)
             
             # Number of videos to use for a more dynamic video
             target_video_count = 4  # We want to use 4 videos for a more dynamic experience
             
-            if local_videos:
-                # Use existing videos if we have enough
-                if len(local_videos) >= target_video_count:
-                    print(colored(f"Using {target_video_count} local videos from {video_dir} for a dynamic video", "green"))
-                    
-                    # Select a subset of videos to use
-                    selected_videos = random.sample(local_videos, target_video_count)
+            # Initialize final video list
+            final_videos = []
+            
+            # Step 1: Analyze script to identify key themes and categories
+            script_analysis = self._analyze_script_content(script) if script else {}
+            
+            # Extract main categories from script analysis
+            categories = []
+            if 'main_subject' in script_analysis:
+                categories.extend(script_analysis['main_subject'])
+            if 'objects' in script_analysis:
+                categories.extend(script_analysis['objects'])
+            if 'environment' in script_analysis:
+                categories.extend(script_analysis['environment'])
+            
+            # Add channel type as a category
+            categories.append(channel_type)
+            
+            # Remove duplicates and empty strings
+            categories = [cat for cat in list(dict.fromkeys(categories)) if cat]
+            
+            print(colored(f"Identified categories: {', '.join(categories)}", "blue"))
+            
+            # Step 2: Check for categorized videos first
+            categorized_videos = []
+            for category in categories:
+                category_dir = os.path.join(categorized_dir, self._sanitize_filename(category))
+                if os.path.exists(category_dir):
+                    category_videos = [os.path.join(category_dir, f) for f in os.listdir(category_dir) 
+                                     if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(category_dir, f)) > 0]
                     
                     # Verify each video is valid
-                    valid_videos = []
-                    for video_path in selected_videos:
+                    for video_path in category_videos:
                         try:
-                            # Check if the video is valid
                             video = VideoFileClip(video_path)
                             if video.duration >= 3:  # At least 3 seconds
-                                valid_videos.append(video_path)
+                                categorized_videos.append(video_path)
                             video.close()
                         except Exception as e:
                             print(colored(f"Error checking video {video_path}: {str(e)}", "yellow"))
-                    
-                    # If we have at least 2 valid videos, return them
-                    if len(valid_videos) >= 2:
-                        print(colored(f"Using {len(valid_videos)} valid local videos for a dynamic video", "green"))
-                        return valid_videos
-                    
-                # If we don't have enough valid videos, use what we have
-                if local_videos:
-                    print(colored(f"Using {len(local_videos)} local videos", "green"))
-                    return local_videos
             
-            # If we don't have local videos, try to get suggestions from GPT
-            if script:
-                print(colored("No local videos found, getting suggestions from GPT", "yellow"))
+            if categorized_videos:
+                print(colored(f"Found {len(categorized_videos)} relevant categorized videos", "green"))
+                # If we have more than needed, randomly select some
+                if len(categorized_videos) > target_video_count:
+                    selected = random.sample(categorized_videos, target_video_count)
+                    final_videos.extend(selected)
+                    print(colored(f"Selected {len(selected)} categorized videos", "green"))
+                else:
+                    final_videos.extend(categorized_videos)
+            
+            # Step 3: Check channel-specific videos if we need more
+            if len(final_videos) < target_video_count:
+                remaining_slots = target_video_count - len(final_videos)
                 
-                # Analyze script content
-                script_analysis = self._analyze_script_content(script)
+                # Check if we have local videos for this channel
+                channel_videos = [os.path.join(video_dir, f) for f in os.listdir(video_dir) 
+                               if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(video_dir, f)) > 0]
+                
+                # Verify each video is valid
+                valid_channel_videos = []
+                for video_path in channel_videos:
+                    try:
+                        video = VideoFileClip(video_path)
+                        if video.duration >= 3:  # At least 3 seconds
+                            valid_channel_videos.append(video_path)
+                        video.close()
+                    except Exception as e:
+                        print(colored(f"Error checking video {video_path}: {str(e)}", "yellow"))
+                
+                if valid_channel_videos:
+                    # If we have more than needed, randomly select some
+                    if len(valid_channel_videos) > remaining_slots:
+                        selected = random.sample(valid_channel_videos, remaining_slots)
+                        final_videos.extend(selected)
+                        print(colored(f"Added {len(selected)} channel-specific videos", "green"))
+                    else:
+                        final_videos.extend(valid_channel_videos)
+                        print(colored(f"Added {len(valid_channel_videos)} channel-specific videos", "green"))
+            
+            # Step 4: Download new videos if needed
+            if len(final_videos) < target_video_count and script:
+                remaining_slots = target_video_count - len(final_videos)
+                print(colored(f"Need {remaining_slots} more videos, downloading from Pexels", "blue"))
                 
                 # Get video suggestions from GPT
                 suggestions = await self._get_video_suggestions(script)
@@ -983,22 +922,52 @@ class VideoGenerator:
                     # Deduplicate terms
                     search_terms = list(dict.fromkeys(search_terms))
                     
-                    # Limit to target_video_count terms for variety
-                    search_terms = search_terms[:target_video_count]
+                    # Limit to remaining slots
+                    search_terms = search_terms[:remaining_slots]
                     
-                    # Search for videos
-                    final_videos = []
+                    # Search for videos and save them to categorized directories
                     for term in search_terms:
-                        videos = await self._search_and_save_videos(term, video_dir, count=1)
+                        # Create category directory
+                        category_dir = os.path.join(categorized_dir, self._sanitize_filename(term))
+                        os.makedirs(category_dir, exist_ok=True)
+                        
+                        # Download video
+                        videos = await self._search_and_save_videos(term, category_dir, count=1)
                         if videos:
                             final_videos.extend(videos)
+                            print(colored(f"Downloaded and categorized video for '{term}'", "green"))
+                        
+                        # If we have enough videos, stop downloading
+                        if len(final_videos) >= target_video_count:
+                            break
+            
+            # Step 5: If we still don't have enough videos, use generic search terms
+            if len(final_videos) < 2 and script:
+                print(colored("Not enough videos, searching for more from Pexels", "yellow"))
+                
+                # Generate more search terms
+                more_terms = self._generate_generic_search_terms(channel_type)
+                
+                # Search for videos
+                for term in more_terms:
+                    # Create category directory
+                    category_dir = os.path.join(categorized_dir, self._sanitize_filename(term))
+                    os.makedirs(category_dir, exist_ok=True)
                     
+                    # Download video
+                    videos = await self._search_and_save_videos(term, category_dir, count=1)
+                    if videos:
+                        final_videos.extend(videos)
+                        print(colored(f"Downloaded and categorized video for '{term}'", "green"))
+                    
+                    # If we have enough videos, stop searching
                     if len(final_videos) >= 2:
-                        print(colored(f"Found {len(final_videos)} videos from search for a dynamic video", "green"))
-                        return final_videos
-                    elif final_videos:
-                        print(colored(f"Found {len(final_videos)} videos from search", "green"))
-                        return final_videos
+                        break
+            
+            # If we have at least 2 videos, return them
+            if len(final_videos) >= 2:
+                print(colored(f"Using {len(final_videos)} videos for a dynamic video", "green"))
+                return final_videos
             
             # If all else fails, create a default background
             print(colored("No videos found, creating default background", "yellow"))
@@ -1006,8 +975,34 @@ class VideoGenerator:
             
         except Exception as e:
             print(colored(f"Error processing background videos: {str(e)}", "red"))
+            traceback.print_exc()
             # Create a default background as fallback
             return self._create_default_background(channel_type)
+    
+    def _sanitize_filename(self, filename):
+        """Sanitize a string to be used as a filename"""
+        # Replace spaces with underscores and remove invalid characters
+        valid_chars = "-_.() abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        sanitized = ''.join(c for c in filename if c in valid_chars)
+        sanitized = sanitized.replace(' ', '_').lower()
+        
+        # Ensure the filename is not empty
+        if not sanitized:
+            sanitized = "unnamed"
+            
+        return sanitized
+
+    def _generate_generic_search_terms(self, channel_type):
+        """Generate generic search terms based on channel type"""
+        generic_terms = {
+            'tech_humor': ['technology background', 'computer animation', 'digital world', 'tech abstract'],
+            'ai_money': ['business growth', 'finance technology', 'digital money', 'success graph'],
+            'baby_tips': ['happy baby', 'parenting moments', 'child playing', 'family time'],
+            'quick_meals': ['food preparation', 'cooking ingredients', 'kitchen scene', 'healthy food'],
+            'fitness_motivation': ['workout session', 'fitness training', 'exercise routine', 'active lifestyle']
+        }
+        
+        return generic_terms.get(channel_type, ['abstract background', 'colorful motion', 'dynamic background'])
 
     async def _search_and_save_videos(self, term, directory, count):
         """Helper function to search and save videos"""
@@ -1214,17 +1209,125 @@ class VideoGenerator:
         return sections
 
     def cleanup_temp_files(self):
-        """Clean up temporary files"""
+        """Clean up temporary files after video generation"""
         try:
-            for file in os.listdir(self.temp_dir):
-                file_path = os.path.join(self.temp_dir, file)
+            # Clean up temporary files
+            for file in glob.glob("temp/segments/*.mp4"):
                 try:
-                    if os.path.isfile(file_path):
-                        os.unlink(file_path)
+                    os.remove(file)
                 except Exception as e:
-                    print(colored(f"Error deleting {file_path}: {str(e)}", "yellow"))
+                    print(colored(f"Warning: Could not remove {file}: {str(e)}", "yellow"))
+            
+            for file in glob.glob("temp/tts/sentence_*.wav"):
+                try:
+                    os.remove(file)
+                except Exception as e:
+                    print(colored(f"Warning: Could not remove {file}: {str(e)}", "yellow"))
+                    
+            print(colored("✓ Temporary files cleaned up", "green"))
+            
         except Exception as e:
-            print(colored(f"Error during cleanup: {str(e)}", "yellow"))
+            print(colored(f"Warning: Error cleaning up temporary files: {str(e)}", "yellow"))
+
+    def cleanup_video_library(self, channel_type=None, max_videos=20, days_to_keep=30):
+        """
+        Clean up the video library to prevent excessive accumulation of videos.
+        
+        Args:
+            channel_type: Specific channel to clean up, or None for all channels
+            max_videos: Maximum number of videos to keep per channel/category
+            days_to_keep: Keep videos newer than this many days regardless of count
+        """
+        try:
+            # Clean up channel-specific videos
+            channels = [channel_type] if channel_type else ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
+            
+            for channel in channels:
+                video_dir = os.path.join("assets", "videos", channel)
+                if os.path.exists(video_dir):
+                    self._cleanup_directory(video_dir, max_videos, days_to_keep)
+            
+            # Clean up categorized videos
+            categorized_dir = os.path.join("assets", "videos", "categorized")
+            if os.path.exists(categorized_dir):
+                # Get all category directories
+                categories = [d for d in os.listdir(categorized_dir) 
+                             if os.path.isdir(os.path.join(categorized_dir, d))]
+                
+                for category in categories:
+                    category_dir = os.path.join(categorized_dir, category)
+                    self._cleanup_directory(category_dir, max_videos, days_to_keep)
+                
+                print(colored(f"Cleaned up {len(categories)} video categories", "green"))
+                
+        except Exception as e:
+            print(colored(f"Warning: Error cleaning up video library: {str(e)}", "yellow"))
+            traceback.print_exc()
+    
+    def _cleanup_directory(self, directory, max_videos=20, days_to_keep=30):
+        """Helper method to clean up a specific directory of videos"""
+        try:
+            # Get all videos in the directory
+            videos = [os.path.join(directory, f) for f in os.listdir(directory) 
+                     if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(directory, f)) > 0]
+            
+            # If we have fewer videos than the maximum, no need to clean up
+            if len(videos) <= max_videos:
+                print(colored(f"Video library for {os.path.basename(directory)} is within limits ({len(videos)}/{max_videos})", "green"))
+                return
+            
+            print(colored(f"Cleaning up video library for {os.path.basename(directory)} ({len(videos)} videos, keeping max {max_videos})", "blue"))
+            
+            # Get video info with creation time
+            video_info = []
+            cutoff_date = time.time() - (days_to_keep * 24 * 60 * 60)  # Convert days to seconds
+            
+            for video_path in videos:
+                # Get creation time
+                creation_time = os.path.getctime(video_path)
+                # Add to list
+                video_info.append({
+                    'path': video_path,
+                    'created': creation_time,
+                    'keep': creation_time > cutoff_date  # Keep if newer than cutoff
+                })
+            
+            # Sort by creation time (oldest first)
+            video_info.sort(key=lambda x: x['created'])
+            
+            # Count videos to keep (those marked as keep)
+            keep_count = sum(1 for v in video_info if v['keep'])
+            
+            # If we're keeping more than max_videos due to age, adjust max_videos
+            if keep_count > max_videos:
+                print(colored(f"Keeping {keep_count} videos for {os.path.basename(directory)} due to age restriction", "yellow"))
+                return
+            
+            # Calculate how many videos to delete
+            delete_count = len(videos) - max(max_videos, keep_count)
+            
+            if delete_count <= 0:
+                print(colored(f"No videos need to be deleted for {os.path.basename(directory)}", "green"))
+                return
+            
+            # Delete oldest videos that aren't marked to keep
+            deleted = 0
+            for video in video_info:
+                if deleted >= delete_count:
+                    break
+                    
+                if not video['keep']:
+                    try:
+                        os.remove(video['path'])
+                        deleted += 1
+                        print(colored(f"Deleted old video: {os.path.basename(video['path'])}", "yellow"))
+                    except Exception as e:
+                        print(colored(f"Warning: Could not remove {video['path']}: {str(e)}", "yellow"))
+            
+            print(colored(f"Cleaned up {deleted} videos for {os.path.basename(directory)}", "green"))
+            
+        except Exception as e:
+            print(colored(f"Warning: Error cleaning up directory {directory}: {str(e)}", "yellow"))
 
     async def _generate_delayed_subtitles(self, script, audio_path, channel_type, delay=1.0):
         """Generate subtitles with a delay for padding"""
@@ -1354,6 +1457,155 @@ class VideoGenerator:
         finally:
             # Clean up temporary files if needed
             pass
+
+    async def _generate_video(self, tts_path, subtitles_path, background_videos, channel_type):
+        """Generate the final video with audio and subtitles"""
+        try:
+            # Trim the end of the audio to remove strange sounds (0.3 seconds from the end)
+            # This helps prevent the audio looping issue
+            print(colored("Trimming 0.3 seconds from the end of audio to remove artifacts and prevent looping", "blue"))
+            original_audio = AudioFileClip(tts_path)
+            
+            # Ensure we don't trim too much if the audio is short
+            trim_amount = min(0.3, original_audio.duration * 0.02)  # Either 0.3s or 2% of duration, whichever is smaller
+            trimmed_audio = original_audio.subclip(0, original_audio.duration - trim_amount)
+            
+            # Add 1-second silence at the beginning of the audio to match subtitle delay
+            print(colored("Adding 1-second silence at the beginning of audio to match subtitle delay", "blue"))
+            
+            # Create 1 second of silence with the same parameters as the original audio
+            silence_duration = 1.0
+            silence = AudioClip(lambda t: 0, duration=silence_duration)
+            
+            # Add a small silence at the end to prevent audio loop issues
+            end_silence = AudioClip(lambda t: 0, duration=0.5)
+            
+            # Concatenate silence at beginning, trimmed audio, and silence at end
+            delayed_audio = concatenate_audioclips([silence, trimmed_audio, end_silence])
+            
+            # Save the delayed audio to a temporary file
+            delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
+            delayed_audio.write_audiofile(delayed_audio_path)
+            
+            # Close the audio clips to free resources
+            original_audio.close()
+            trimmed_audio.close()
+            delayed_audio.close()
+            
+            # Use the delayed audio for the rest of the process
+            tts_path = delayed_audio_path
+                
+            # Get audio duration for video length calculation
+            audio_clip = AudioFileClip(tts_path)
+            audio_duration = audio_clip.duration
+            audio_clip.close()
+            
+            print(colored(f"Original audio duration: {audio_duration:.2f}s", "blue"))
+            
+            # Calculate target duration with padding
+            start_padding = 1.0  # 1 second at start (already added to audio)
+            end_padding = 3.0    # 3 seconds at end (increased from 2 to 3 seconds)
+            target_duration = audio_duration + end_padding  # Start padding already included in audio
+            print(colored(f"Video duration: {target_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)", "blue"))
+            
+            # Generate video
+            from video import generate_video
+            video = generate_video(
+                background_path=background_videos,
+                audio_path=tts_path,
+                subtitles_path=subtitles_path,
+                content_type=channel_type,
+                target_duration=target_duration
+            )
+            
+            if not video:
+                print(colored("Failed to generate video", "red"))
+                return None
+                
+            # Write final video with specific parameters to prevent black frames
+            temp_video_path = "temp/temp_video_no_audio.mp4"
+            temp_audio_path = "temp/temp_audio.mp3"
+            output_path = "temp_output.mp4"
+            
+            print(colored(f"\n=== 🎥 Rendering Final Video 🎥 ===", "blue"))
+            print(colored(f"ℹ️ Output path: {output_path}", "cyan"))
+            
+            # Show a message about rendering time
+            print(colored("⏳ Rendering final video... This may take a while", "cyan"))
+            start_time = time.time()
+            
+            # Step 1: Extract the audio - handle both simple AudioFileClip and CompositeAudioClip
+            if hasattr(video, 'audio') and video.audio is not None:
+                # Check if it's a CompositeAudioClip (which doesn't have fps)
+                if isinstance(video.audio, CompositeAudioClip):
+                    # Create a new audio file directly from the source
+                    source_audio = AudioFileClip(tts_path)
+                    source_audio.write_audiofile(temp_audio_path)
+                    source_audio.close()
+                else:
+                    # It's a regular AudioFileClip
+                    video.audio.write_audiofile(temp_audio_path)
+            else:
+                # If no audio in video, use the original TTS file
+                shutil.copy2(tts_path, temp_audio_path)
+            
+            # Step 2: Write the video without audio
+            video.without_audio().write_videofile(
+                temp_video_path,
+                codec='libx264',
+                fps=30,
+                preset='ultrafast',
+                ffmpeg_params=["-vf", "format=yuv420p"]
+            )
+            
+            # Step 3: Combine video and audio using ffmpeg directly
+            # IMPORTANT: Removed the -shortest flag to ensure the full video duration is preserved
+            import subprocess
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", temp_video_path,
+                "-i", temp_audio_path,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-map", "0:v:0",  # Use the entire video track
+                "-map", "1:a:0",  # Use the entire audio track
+                "-af", "afade=t=out:st=" + str(audio_duration - 0.5) + ":d=0.5",  # Add fade out to audio
+                output_path
+            ]
+            subprocess.run(cmd, check=True)
+            
+            elapsed_time = time.time() - start_time
+            print(colored(f"⏱️ Video rendered in {elapsed_time:.1f} seconds", "cyan"))
+            
+            # Clean up
+            print(colored("ℹ️ Cleaning up resources...", "cyan"))
+            try:
+                video.close()
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+                if os.path.exists(temp_audio_path):
+                    os.remove(temp_audio_path)
+            except Exception as e:
+                print(colored(f"Warning: Error during cleanup: {str(e)}", "yellow"))
+            
+            # Create timestamped output path
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            final_output_path = f"output/videos/{channel_type}_{timestamp}.mp4"
+            
+            # Create latest output path
+            latest_path = f"output/videos/{channel_type}_latest.mp4"
+            
+            # Copy to output directory
+            os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
+            shutil.copy2(output_path, final_output_path)
+            shutil.copy2(output_path, latest_path)
+            
+            return final_output_path
+            
+        except Exception as e:
+            print(colored(f"Error generating video: {str(e)}", "red"))
+            traceback.print_exc()
+            return None
 
 def generate_video_for_channel(channel, topic, hashtags):
     """Generate and upload a video for a specific channel"""

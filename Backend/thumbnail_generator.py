@@ -363,6 +363,70 @@ class ThumbnailGenerator:
         
         return result
 
+    def get_template(self, content_type):
+        """Get thumbnail template based on content type"""
+        templates = {
+            'tech_humor': {
+                'text': 'Tech Humor',
+                'colors': ['#3a1c71', '#d76d77'],
+                'emoji': '🤣💻'
+            },
+            'ai_money': {
+                'text': 'AI Money',
+                'colors': ['#0F2027', '#2C5364'],
+                'emoji': '💰🤖'
+            },
+            'baby_tips': {
+                'text': 'Baby Tips',
+                'colors': ['#11998e', '#38ef7d'],
+                'emoji': '👶🍼'
+            },
+            'quick_meals': {
+                'text': 'Quick Meals',
+                'colors': ['#EB3349', '#F45C43'],
+                'emoji': '🍲⏱️'
+            },
+            'fitness_motivation': {
+                'text': 'Fitness Motivation',
+                'colors': ['#4e54c8', '#8f94fb'],
+                'emoji': '💪🏋️'
+            }
+        }
+        
+        # Return template for content type or default
+        return templates.get(content_type, {
+            'text': 'Engaging Content',
+            'colors': ['#5433FF', '#20BDFF'],
+            'emoji': '🔥✨'
+        })
+
+    def generate_test_thumbnails(self):
+        """Generate test thumbnails for each content type"""
+        try:
+            print(colored("\n=== Generating Test Thumbnails ===", "blue"))
+            
+            # Create test_thumbnails directory if it doesn't exist
+            os.makedirs("test_thumbnails", exist_ok=True)
+            
+            # Generate thumbnails for each content type
+            content_types = ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
+            
+            for content_type in content_types:
+                output_path = f"test_thumbnails/{content_type}.jpg"
+                
+                # Generate thumbnail
+                thumbnail_path = self.generate_thumbnail(content_type, output_path)
+                
+                if thumbnail_path:
+                    print(colored(f"✓ Generated test thumbnail for {content_type}: {thumbnail_path}", "green"))
+                else:
+                    print(colored(f"✗ Failed to generate test thumbnail for {content_type}", "red"))
+            
+            print(colored("\n=== Test Thumbnails Generation Complete ===", "green"))
+            
+        except Exception as e:
+            print(colored(f"Error generating test thumbnails: {str(e)}", "red"))
+
 def get_engagement_phrases(content_type):
     """Return engaging transition phrases based on content type"""
     phrases = {
