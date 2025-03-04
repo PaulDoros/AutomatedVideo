@@ -1262,6 +1262,99 @@ class VideoGenerator:
             print(colored(f"Delayed subtitles generation failed: {str(e)}", "red"))
             return None
 
+    async def create_tts_audio(self, script, channel_type, voice=None):
+        """Create TTS audio from script"""
+        try:
+            # Create temp directory
+            os.makedirs("temp/tts", exist_ok=True)
+            
+            # Get voice for channel
+            if not voice and self.use_coqui_tts:
+                voice, emotion = self.select_coqui_voice(channel_type)
+                print(colored(f"Selected voice: {voice} (emotion: {emotion})", "blue"))
+                
+                # Apply speed multiplier based on content type and emotion
+                speed_multiplier = 1.0
+                if channel_type == 'tech_humor':
+                    # Faster for tech humor content
+                    speed_multiplier = 1.3
+                    print(colored(f"Using speed multiplier of {speed_multiplier} for {channel_type} content", "blue"))
+                elif emotion in ["energetic", "enthusiastic", "playful"]:
+                    # Faster for energetic emotions
+                    speed_multiplier = 1.25
+                    print(colored(f"Using speed multiplier of {speed_multiplier} for {emotion} {channel_type} content", "blue"))
+                
+                # Generate TTS audio with Coqui
+                from coqui_integration import CoquiTTSAPI
+                
+                coqui = CoquiTTSAPI()
+                
+                # Process script into sentences for better TTS quality
+                print(colored(f"Processing {len(script.split('.'))} sentences for better TTS quality", "blue"))
+                
+                # Generate TTS for each sentence separately for better quality
+                sentences = [s.strip() for s in script.split('.') if s.strip()]
+                audio_files = []
+                
+                print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed_multiplier})", "blue"))
+                
+                for i, sentence in enumerate(sentences):
+                    # Add period back if it was removed by split
+                    if not sentence.endswith(('!', '?', '.')):
+                        sentence += '.'
+                    
+                    # Add slight pause between sentences
+                    if i > 0:
+                        sentence = f"<break time='0.2s'/> {sentence}"
+                    
+                    # Generate audio for this sentence
+                    output_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
+                    result = await coqui.generate_voice(
+                        text=sentence,
+                        speaker=voice,
+                        language="en",
+                        emotion=emotion,
+                        speed=speed_multiplier,
+                        output_path=output_path
+                    )
+                    
+                    if result:
+                        audio_files.append(result)
+                    else:
+                        print(colored(f"Failed to generate TTS for sentence: {sentence}", "red"))
+                
+                # Combine all sentence audio files
+                if audio_files:
+                    # Create output path
+                    output_path = f"temp/tts/{channel_type}_{emotion}_{int(time.time())}.wav"
+                    
+                    # Concatenate audio files
+                    from pydub import AudioSegment
+                    combined = AudioSegment.empty()
+                    for audio_file in audio_files:
+                        segment = AudioSegment.from_file(audio_file)
+                        combined += segment
+                    
+                    # Export combined audio
+                    combined.export(output_path, format="wav")
+                    
+                    # Convert to MP3 for smaller file size
+                    mp3_path = f"temp/tts/{channel_type}_latest.mp3"
+                    combined.export(mp3_path, format="mp3", bitrate="128k")
+                    
+                    print(colored(f"✓ Generated voice file: {output_path}", "green"))
+                    return mp3_path
+            
+            # If we get here, either no Coqui TTS or no audio files were generated
+            return None
+            
+        except Exception as e:
+            print(colored(f"Error creating TTS audio: {str(e)}", "red"))
+            return None
+        finally:
+            # Clean up temporary files if needed
+            pass
+
 def generate_video_for_channel(channel, topic, hashtags):
     """Generate and upload a video for a specific channel"""
     try:

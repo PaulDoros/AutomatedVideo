@@ -36,13 +36,24 @@ EMOTIONS = [
 
 # Emotion mappings for different content types
 CONTENT_EMOTIONS = {
-    "tech_humor": ["humorous", "playful", "witty", "sarcastic", "enthusiastic", "energetic"],
+    "tech_humor": ["energetic", "enthusiastic", "playful", "humorous", "witty"],  # Prioritize more energetic emotions for tech humor
     "ai_money": ["professional", "serious", "confident", "engaging", "authoritative"],
     "baby_tips": ["warm", "friendly", "gentle", "reassuring", "nurturing"],
     "quick_meals": ["enthusiastic", "energetic", "cheerful", "friendly", "engaging"],
     "fitness_motivation": ["energetic", "motivational", "enthusiastic", "confident", "encouraging"],
     "default": ["neutral", "friendly", "professional"]
 }
+
+# Best voices for tech humor content - these are the most energetic and clear voices
+BEST_TECH_HUMOR_VOICES = [
+    "Damien Black",  # Energetic male voice
+    "Viktor Yates",  # Clear and engaging
+    "Andrew Childs", # Good for jokes
+    "Royston Elliot", # Enthusiastic
+    "Ilkin Urbano",  # Energetic and clear
+    "Zacharie Aston", # Good for tech content
+    "Wulf Warrick"   # Engaging and clear
+]
 
 class VoiceDiversification:
     """Voice diversification system for video voiceovers"""
@@ -237,11 +248,18 @@ class VoiceDiversification:
     def select_voice(self, channel_type, gender=None):
         """Select a voice based on channel type and gender preference with consistent results"""
         try:
+            # For tech_humor, use only the best voices
+            if channel_type == 'tech_humor':
+                # Filter available voices to only include the best ones for tech humor
+                best_voices = [v for v in self.all_voices if any(best in v for best in BEST_TECH_HUMOR_VOICES)]
+                if best_voices:
+                    # Return a random voice from the best voices
+                    return random.choice(best_voices)
+                # If no best voices are available, fall back to male voices
+                gender = 'male'
             # Determine gender preference based on content type if not specified
-            if gender is None:
-                if channel_type == 'tech_humor':
-                    gender = 'male'  # Use male voices for tech humor
-                elif channel_type == 'baby_tips':
+            elif gender is None:
+                if channel_type == 'baby_tips':
                     gender = 'female'  # Prefer female voices for baby tips
                 elif channel_type == 'fitness_motivation':
                     gender = 'male'    # Prefer male voices for fitness motivation

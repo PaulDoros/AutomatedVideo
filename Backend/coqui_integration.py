@@ -193,14 +193,21 @@ class CoquiTTSAPI:
                 # On GPU, we can use higher quality settings
                 # Adjust speed based on content type in the output path
                 if "tech_humor" in output_path:
-                    # Faster for tech humor content
-                    tts_kwargs["speed"] = speed * 1.2
+                    # Faster for tech humor content - increase speed for jokes
+                    tts_kwargs["speed"] = speed * 1.3
+                    print(colored(f"Using speed multiplier of 1.3 for tech_humor content", "blue"))
+                elif emotion in ["energetic", "enthusiastic", "playful"]:
+                    # Faster for energetic emotions
+                    tts_kwargs["speed"] = speed * 1.25
+                    print(colored(f"Using speed multiplier of 1.25 for {emotion} emotion", "blue"))
                 elif emotion == "cheerful":
                     # Slightly faster for cheerful emotion
-                    tts_kwargs["speed"] = speed * 1.1
+                    tts_kwargs["speed"] = speed * 1.15
+                    print(colored(f"Using speed multiplier of 1.15 for cheerful emotion", "blue"))
                 else:
                     # Normal speed for other emotions
                     tts_kwargs["speed"] = speed
+                    print(colored(f"Using normal speed for {emotion} emotion", "blue"))
                 
                 # Add quality settings for GPU
                 if hasattr(self, 'gpu_optimization_level') and self.gpu_optimization_level == "high_quality":
