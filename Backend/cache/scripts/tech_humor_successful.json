@@ -7,5 +7,32 @@
       "lines": 7
     },
     "timestamp": 1740492766.4118679
+  },
+  {
+    "script": "\"Ever notice how your phone's autocorrect \ud83d\udcf1\u270d\ufe0f acts like that one overly confident friend? \ud83d\ude02 You're trying to type 'I'm home' \ud83c\udfe0 and it's like, 'Did you mean honeymoon? \ud83c\udf6f\ud83c\udf15' No, phone, I'm just trying to let my mom know I'm not out late, not planning a spontaneous trip to Paris! \ud83e\udd26\u200d\u2642\ufe0f And don't get me started on trying to curse... Suddenly, I'm ducking mad about everything. \ud83e\udd86\ud83d\ude21 Hit like for more tech humor!\"",
+    "metrics": {
+      "duration": 30.400000000000002,
+      "words": 76,
+      "lines": 1
+    },
+    "timestamp": 1741088719.5707622
+  },
+  {
+    "script": "Script:\n\nEver try explaining cloud computing to someone not in tech? \ud83c\udf10\ud83d\udcbb It's like, \"Imagine your data in a balloon, floating up to join a party in the sky.\" \ud83c\udf88\ud83c\udf89\n\nThey nod, eyes wide, but you know they're picturing a literal cloud party. \u2601\ufe0f\ud83e\udd23\n\nAnd when they ask, \"What if it rains?\" \ud83c\udf27\ufe0f\ud83d\ude05 That's when you realize, maybe tech metaphors need a reboot.\n\nHit like for more tech humor! \ud83e\udd26\u200d\u2642\ufe0f\ud83d\udc4d",
+    "metrics": {
+      "duration": 27.200000000000003,
+      "words": 68,
+      "lines": 5
+    },
+    "timestamp": 1741089095.4467487
+  },
+  {
+    "script": "Ever notice how AI assistants \ud83e\udd16 are like that one friend who never listens? \ud83d\ude05 You ask them to play your favorite jam \ud83c\udfb6, and next thing you know, you're listening to a podcast on jam-making. \ud83c\udf53\ud83d\ude02 It's like, \"Hey Siri, play some hip-hop,\" and she's like, \"Got it. Starting your 2-hour podcast on the history of hip surgery.\" \ud83e\udd26\u200d\u2642\ufe0f Hit like for more tech humor! \ud83d\ude02\ud83d\udc4d",
+    "metrics": {
+      "duration": 26.8,
+      "words": 67,
+      "lines": 1
+    },
+    "timestamp": 1741090371.9039936
   }
 ]

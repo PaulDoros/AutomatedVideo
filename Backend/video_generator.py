@@ -905,7 +905,7 @@ class VideoGenerator:
             return None
 
     async def _process_background_videos(self, channel_type, script=None):
-        """Process background videos for the channel"""
+        """Process background videos for the channel - now with multiple video support"""
         try:
             print(colored("\n=== Processing Background Videos ===", "blue"))
             
@@ -917,33 +917,38 @@ class VideoGenerator:
             local_videos = [os.path.join(video_dir, f) for f in os.listdir(video_dir) 
                            if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(video_dir, f)) > 0]
             
+            # Number of videos to use for a more dynamic video
+            target_video_count = 4  # We want to use 4 videos for a more dynamic experience
+            
             if local_videos:
-                # Use existing videos if we have at least 4
-                if len(local_videos) >= 4:
-                    print(colored(f"Using {len(local_videos)} local videos from {video_dir}", "green"))
+                # Use existing videos if we have enough
+                if len(local_videos) >= target_video_count:
+                    print(colored(f"Using {target_video_count} local videos from {video_dir} for a dynamic video", "green"))
                     
-                    # Instead of returning all videos, return just one video that's long enough
-                    # This avoids the complex video combination that's causing issues
-                    for video_path in local_videos:
+                    # Select a subset of videos to use
+                    selected_videos = random.sample(local_videos, target_video_count)
+                    
+                    # Verify each video is valid
+                    valid_videos = []
+                    for video_path in selected_videos:
                         try:
-                            # Check if the video is long enough
+                            # Check if the video is valid
                             video = VideoFileClip(video_path)
-                            if video.duration >= 15:  # At least 15 seconds
-                                video.close()
-                                print(colored(f"Using single video: {video_path}", "green"))
-                                return [video_path]
+                            if video.duration >= 3:  # At least 3 seconds
+                                valid_videos.append(video_path)
                             video.close()
                         except Exception as e:
                             print(colored(f"Error checking video {video_path}: {str(e)}", "yellow"))
                     
-                    # If we didn't find a long enough video, return the first one
-                    print(colored(f"Using first video: {local_videos[0]}", "green"))
-                    return [local_videos[0]]
-                
-                # If we have some videos but not enough, use what we have
+                    # If we have at least 2 valid videos, return them
+                    if len(valid_videos) >= 2:
+                        print(colored(f"Using {len(valid_videos)} valid local videos for a dynamic video", "green"))
+                        return valid_videos
+                    
+                # If we don't have enough valid videos, use what we have
                 if local_videos:
                     print(colored(f"Using {len(local_videos)} local videos", "green"))
-                    return [local_videos[0]]  # Just use the first one to avoid combination issues
+                    return local_videos
             
             # If we don't have local videos, try to get suggestions from GPT
             if script:
@@ -961,10 +966,15 @@ class VideoGenerator:
                     
                     # Add GPT suggestions first (they're usually better)
                     for suggestion in suggestions:
-                        if suggestion.startswith('**') and suggestion.endswith('**'):
-                            term = suggestion.strip('*').strip()
+                        if isinstance(suggestion, dict) and 'term' in suggestion:
+                            term = suggestion['term']
                             if term and len(term) > 3:
                                 search_terms.append(term)
+                        elif isinstance(suggestion, str):
+                            if suggestion.startswith('**') and suggestion.endswith('**'):
+                                term = suggestion.strip('*').strip()
+                                if term and len(term) > 3:
+                                    search_terms.append(term)
                     
                     # Add terms from script analysis as backup
                     analysis_terms = self._generate_search_terms(script_analysis)
@@ -973,8 +983,8 @@ class VideoGenerator:
                     # Deduplicate terms
                     search_terms = list(dict.fromkeys(search_terms))
                     
-                    # Limit to 4 terms for variety
-                    search_terms = search_terms[:4]
+                    # Limit to target_video_count terms for variety
+                    search_terms = search_terms[:target_video_count]
                     
                     # Search for videos
                     final_videos = []
@@ -982,14 +992,13 @@ class VideoGenerator:
                         videos = await self._search_and_save_videos(term, video_dir, count=1)
                         if videos:
                             final_videos.extend(videos)
-                        
-                        # Stop once we have at least one video
-                        if len(final_videos) >= 1:
-                            break
                     
-                    if final_videos:
+                    if len(final_videos) >= 2:
+                        print(colored(f"Found {len(final_videos)} videos from search for a dynamic video", "green"))
+                        return final_videos
+                    elif final_videos:
                         print(colored(f"Found {len(final_videos)} videos from search", "green"))
-                        return [final_videos[0]]  # Just use the first one to avoid combination issues
+                        return final_videos
             
             # If all else fails, create a default background
             print(colored("No videos found, creating default background", "yellow"))
@@ -998,11 +1007,7 @@ class VideoGenerator:
         except Exception as e:
             print(colored(f"Error processing background videos: {str(e)}", "red"))
             # Create a default background as fallback
-            try:
-                return self._create_default_background(channel_type)
-            except:
-                print(colored("Failed to create default background", "red"))
-                return []
+            return self._create_default_background(channel_type)
 
     async def _search_and_save_videos(self, term, directory, count):
         """Helper function to search and save videos"""

@@ -27,6 +27,8 @@ from io import BytesIO
 import re
 import math
 import time
+import shutil
+import subprocess
 
 # First activate your virtual environment and install pysrt:
 # python -m pip install pysrt --no-cache-dir
@@ -192,21 +194,61 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
         log_info(f"Adjusted duration: {adjusted_duration:.2f}s")
         log_info(f"Number of videos: {len(video_paths)}")
         
-        # Calculate how long each video should be
+        # If only one video, just use it directly
+        if len(video_paths) == 1:
+            log_info("Only one video provided, using it directly")
+            video_path = video_paths[0]
+            if isinstance(video_path, dict):
+                video_path = video_path.get('path')
+                
+            if not os.path.exists(video_path):
+                log_error(f"Video file does not exist: {video_path}")
+                return None
+                
+            try:
+                # Load the video
+                video = VideoFileClip(video_path, fps_source="fps")
+                
+                # Resize to vertical format
+                video = resize_to_vertical(video)
+                
+                # Adjust duration if needed
+                if video.duration < adjusted_duration:
+                    log_info(f"Video too short ({video.duration:.2f}s), looping")
+                    video = vfx.loop(video, duration=adjusted_duration)
+                elif video.duration > adjusted_duration:
+                    log_info(f"Video too long ({video.duration:.2f}s), trimming")
+                    video = video.subclip(0, adjusted_duration)
+                
+                # Write to file
+                output_path = "temp_combined.mp4"
+                video.write_videofile(
+                    output_path,
+                    codec="libx264",
+                    audio=False,
+                    fps=30,
+                    preset="medium",
+                    threads=n_threads
+                )
+                video.close()
+                return output_path
+            except Exception as e:
+                log_error(f"Error processing single video: {str(e)}")
+                return None
+        
+        # For multiple videos, we'll use a different approach
+        # Calculate segment duration
         num_videos = len(video_paths)
         segment_duration = adjusted_duration / num_videos
         log_info(f"Segment duration per video: {segment_duration:.2f}s")
         
-        # Keep track of current position in the timeline
-        current_time = 0
+        # Create a temporary directory for segment files
+        temp_dir = "temp/segments"
+        os.makedirs(temp_dir, exist_ok=True)
         
-        # Create clips list with positions for each clip
-        positioned_clips = []
+        # Process each video into a separate file
+        segment_files = []
         
-        # Transition duration (shorter for smoother transitions)
-        transition_duration = 0.5
-        
-        # Process each video
         for i, video_data in enumerate(video_paths):
             log_processing(f"Processing video {i+1}/{num_videos}")
             
@@ -218,230 +260,119 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
             
             log_info(f"Video path: {video_path}")
             
-            # Calculate how much of this video to use
-            this_segment_duration = min(segment_duration, adjusted_duration - current_time)
-            if this_segment_duration <= 0:
-                log_warning("Skipping video (no time left)")
+            # Verify file exists
+            if not os.path.exists(video_path):
+                log_warning(f"Video file does not exist: {video_path}")
                 continue
             
             try:
-                # Verify file exists and is readable before loading
-                if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-                    raise ValueError(f"Video file does not exist or is empty: {video_path}")
-                
-                # Load video with explicit fps to avoid warnings
+                # Load video
                 video = VideoFileClip(video_path, fps_source="fps")
-                log_info(f"Video duration: {video.duration:.2f}s")
                 
-                # Determine which portion to use
-                video_duration = video.duration
+                if video.duration < segment_duration:
+                    log_warning(f"Video too short ({video.duration:.2f}s), skipping")
+                    video.close()
+                    continue
                 
-                # Avoid the first 10% and last 10% of the video for better segments
-                usable_start = video_duration * 0.1
-                usable_end = video_duration * 0.9
-                usable_duration = usable_end - usable_start
+                # Choose a random starting point
+                max_start = max(0, video.duration - segment_duration)
+                start_time = random.uniform(0, max_start)
                 
-                # If the usable portion is too short, use the whole video
-                if usable_duration < this_segment_duration:
-                    usable_start = 0
-                    usable_end = video_duration
-                    usable_duration = video_duration
+                # Create a subclip
+                subclip = video.subclip(start_time, start_time + segment_duration)
                 
-                # Choose a starting point
-                latest_possible_start = usable_end - this_segment_duration
-                if latest_possible_start < usable_start:
-                    video_start = usable_start
-                else:
-                    # Use 25% through the usable portion for more interesting content
-                    video_start = usable_start + (usable_duration * 0.25)
-                    if video_start > latest_possible_start:
-                        video_start = usable_start
+                # Resize to vertical format
+                subclip = resize_to_vertical(subclip)
                 
-                log_info(f"Using segment: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s")
+                # Save segment to a file
+                segment_path = os.path.join(temp_dir, f"segment_{i}.mp4")
+                subclip.write_videofile(
+                    segment_path,
+                    codec="libx264",
+                    audio=False,
+                    fps=30,
+                    preset="medium",
+                    threads=n_threads
+                )
                 
-                # Ensure we don't try to read beyond the video's actual duration
-                end_time = min(video_start + this_segment_duration + (transition_duration if i < num_videos - 1 else 0), video_duration)
+                segment_files.append(segment_path)
+                log_success(f"Created segment {i+1}: {segment_path}")
                 
-                # Create clip - Use explicit values instead of lambda functions
-                clip = video.subclip(video_start, end_time)
-                
-                # Resize to maintain height
-                clip = clip.resize(height=1920)
-                
-                # Fix the crop to use explicit values instead of lambda functions
-                if clip.w > 1080:
-                    x_center = clip.w / 2
-                    x1 = int(x_center - 540)  # 540 is half of 1080
-                    x2 = int(x_center + 540)
-                    clip = clip.crop(x1=x1, y1=0, x2=x2, y2=1920)
-                
-                # If video is too narrow, zoom to fill width
-                if clip.w < 1080:
-                    clip = clip.resize(width=1080)
-                    # If this made it too tall, crop height
-                    if clip.h > 1920:
-                        y_center = clip.h / 2
-                        y1 = int(y_center - 960)  # 960 is half of 1920
-                        y2 = int(y_center + 960)
-                        clip = clip.crop(x1=0, y1=y1, x2=1080, y2=y2)
-                
-                # Apply subtle zoom effect (simple version without lambda)
-                if i % 2 == 0:  # Alternate between zoom in and out
-                    clip = clip.resize(1.02)  # Just a static 2% zoom
-                else:
-                    clip = clip.resize(1.03)  # 3% zoom
-                
-                # Apply very subtle brightness adjustment
-                clip = clip.fx(vfx.colorx, 1.05)  # Simpler than using enhancer
-                
-                # Calculate clip position with overlapping for transitions
-                clip_start = current_time
-                if i > 0:
-                    clip_start -= transition_duration
-                
-                # Add clip with position
-                positioned_clips.append((clip, clip_start))
-                
-                # Update current time
-                current_time += this_segment_duration
-                log_success(f"Current total time: {current_time:.2f}s / {adjusted_duration:.2f}s")
-                
-                # Close the original video to free resources
+                # Close clips
+                subclip.close()
                 video.close()
                 
             except Exception as e:
                 log_error(f"Error processing video {i+1}: {str(e)}")
-                log_warning("Creating fallback styled clip")
-                
-                # Create a styled fallback clip
-                try:
-                    # Create a gradient background
-                    colors = [
-                        ['#3a1c71', '#d76d77'],  # Purple gradient
-                        ['#4e54c8', '#8f94fb'],  # Blue gradient
-                        ['#11998e', '#38ef7d'],  # Green gradient
-                        ['#e1eec3', '#f05053'],  # Yellow-red gradient
-                        ['#355c7d', '#6c5b7b']   # Cool blue-purple gradient
-                    ]
-                    
-                    # Create a simple color clip
-                    color_choice = i % len(colors)
-                    color1 = colors[color_choice][0]
-                    color2 = colors[color_choice][1]
-                    
-                    # Convert hex to RGB
-                    def hex_to_rgb(hex_color):
-                        hex_color = hex_color.lstrip('#')
-                        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-                    
-                    rgb_color = hex_to_rgb(color1)  # Use first color
-                    
-                    # Create a color clip
-                    fallback_clip = ColorClip(size=(1080, 1920), color=rgb_color, duration=this_segment_duration)
-                    
-                    # Add a subtle text label
-                    txt_clip = TextClip(
-                        "Next tip...", 
-                        fontsize=70, 
-                        color='white',
-                        font='Arial-Bold', 
-                        stroke_color='black', 
-                        stroke_width=2
-                    )
-                    txt_clip = txt_clip.set_position(('center', 'center')).set_duration(this_segment_duration)
-                    
-                    fallback_clip = CompositeVideoClip([fallback_clip, txt_clip])
-                    
-                    # Add clip with position
-                    positioned_clips.append((fallback_clip, current_time))
-                    current_time += this_segment_duration
-                    
-                except Exception as inner_e:
-                    log_error(f"Error creating styled clip: {str(inner_e)}")
-                    # Use a simple black clip as last resort
-                    fallback_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
-                    positioned_clips.append((fallback_clip, current_time))
-                    current_time += this_segment_duration
+                continue
         
-        log_section("Creating Final Composite Video", "🎬")
-        log_info(f"Number of clips to combine: {len(positioned_clips)}")
+        # Check if we have any segments
+        if not segment_files:
+            log_error("No valid segments created")
+            return None
         
-        # Check if we have any clips
-        if not positioned_clips:
-            log_error("No clips to combine")
-            # Create a default black clip
-            default_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=adjusted_duration)
-            positioned_clips.append((default_clip, 0))
+        log_info(f"Created {len(segment_files)} video segments")
         
-        # Check if we need to extend the video to match the target duration
-        last_clip, last_start = positioned_clips[-1]
-        current_end = last_start + last_clip.duration
+        # If we only have one segment, just use it
+        if len(segment_files) == 1:
+            log_info("Only one segment created, using it directly")
+            output_path = "temp_combined.mp4"
+            shutil.copy(segment_files[0], output_path)
+            return output_path
         
-        if current_end < adjusted_duration:
-            extension_needed = adjusted_duration - current_end
-            log_warning(f"Video is too short by {extension_needed:.2f}s, adding padding")
-            
-            # Create a simple color clip for padding
-            padding_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=extension_needed + 0.5)
-            positioned_clips.append((padding_clip, current_end - 0.1))  # Small overlap
+        # Create a file list for ffmpeg
+        list_file = os.path.join(temp_dir, "segments.txt")
+        with open(list_file, "w") as f:
+            for segment in segment_files:
+                f.write(f"file '{os.path.abspath(segment)}'\n")
         
-        # Create a list of clips with set_start times
-        composite_clips = []
-        for clip, start_time in positioned_clips:
-            composite_clips.append(clip.set_start(start_time))
-        
-        # Create composite with all clips
-        final_clip = CompositeVideoClip(composite_clips, size=(1080, 1920))
-        log_info(f"Final clip duration: {final_clip.duration:.2f}s")
-        
-        # Set exact duration to match the adjusted duration
-        if abs(final_clip.duration - adjusted_duration) > 0.1:
-            log_warning(f"Setting exact duration to {adjusted_duration:.2f}s")
-            final_clip = final_clip.set_duration(adjusted_duration)
-        
-        # Save combined video
+        # Use ffmpeg to concatenate the segments
         output_path = "temp_combined.mp4"
-        log_info(f"Saving to: {output_path}")
-        
-        # Detect optimal thread count
-        import multiprocessing
-        cpu_count = multiprocessing.cpu_count()
-        optimal_threads = max(4, min(cpu_count - 1, 16))
-        log_info(f"Using {optimal_threads} threads for rendering")
-        
-        # Write video file with optimized settings
-        start_time = time.time()
-        log_processing("Rendering final video... This may take a while")
-        
-        final_clip.write_videofile(
-            output_path,
-            threads=optimal_threads,
-            codec='libx264',
-            audio=False,
-            fps=30,
-            preset='faster',
-            ffmpeg_params=["-shortest", "-avoid_negative_ts", "1"]
-        )
-        
-        elapsed_time = time.time() - start_time
-        log_success(f"Video rendered in {elapsed_time:.1f} seconds")
-        
-        # Clean up resources
-        log_info("Cleaning up resources...")
-        for clip, _ in positioned_clips:
-            try:
-                clip.close()
-            except:
-                pass
-        
         try:
-            final_clip.close()
-        except:
-            pass
-        
-        log_success("Video combination complete")
-        return output_path
-        
+            log_info("Concatenating segments with ffmpeg")
+            
+            # Build the ffmpeg command
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-y",  # Overwrite output file if it exists
+                "-f", "concat",
+                "-safe", "0",
+                "-i", list_file,
+                "-c", "copy",
+                output_path
+            ]
+            
+            # Run the command
+            process = subprocess.run(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if process.returncode != 0:
+                log_error(f"FFmpeg error: {process.stderr}")
+                
+                # Fallback to using the first segment
+                log_warning("Concatenation failed, using first segment as fallback")
+                shutil.copy(segment_files[0], output_path)
+            else:
+                log_success("Successfully concatenated segments")
+            
+            return output_path
+            
+        except Exception as e:
+            log_error(f"Error concatenating segments: {str(e)}")
+            
+            # Fallback to using the first segment
+            try:
+                log_warning("Using first segment as fallback")
+                shutil.copy(segment_files[0], output_path)
+                return output_path
+            except Exception as inner_e:
+                log_error(f"Fallback failed: {str(inner_e)}")
+                return None
+            
     except Exception as e:
         log_error(f"Error in combine_videos: {str(e)}")
         log_error(traceback.format_exc())
@@ -1159,24 +1090,51 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         
         # Handle different background path formats
         if isinstance(background_path, list) and len(background_path) > 0:
-            # Use the first video from the list instead of trying to combine them
-            log_info(f"Using first video from list of {len(background_path)}")
-            background_video_path = background_path[0]
-            
-            # Verify the file exists and is readable
-            if not os.path.exists(background_video_path) or os.path.getsize(background_video_path) == 0:
-                log_error(f"Background video file does not exist or is empty: {background_video_path}")
-                # Create a default background
-                log_warning("Creating default background")
-                background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
-            else:
+            # Check if we have multiple videos to combine
+            if len(background_path) > 1:
+                log_info(f"Combining {len(background_path)} videos for a dynamic background")
                 try:
-                    background_video = VideoFileClip(background_video_path, fps_source="fps")
+                    # Use the combine_videos function to create a dynamic background
+                    combined_video_path = combine_videos(background_path, audio_duration, video_duration)
+                    if combined_video_path and os.path.exists(combined_video_path):
+                        background_video = VideoFileClip(combined_video_path, fps_source="fps")
+                        log_success("Successfully combined multiple videos for a dynamic background")
+                    else:
+                        # Fallback to using the first video if combination fails
+                        log_warning("Video combination failed, using first video as fallback")
+                        background_video_path = background_path[0]
+                        if isinstance(background_video_path, dict):
+                            background_video_path = background_video_path.get('path')
+                        background_video = VideoFileClip(background_video_path, fps_source="fps")
                 except Exception as e:
-                    log_error(f"Error loading background video: {str(e)}")
+                    log_error(f"Error in video combination: {str(e)}")
+                    # Fallback to using the first video
+                    log_warning("Using first video as fallback due to combination error")
+                    background_video_path = background_path[0]
+                    if isinstance(background_video_path, dict):
+                        background_video_path = background_video_path.get('path')
+                    background_video = VideoFileClip(background_video_path, fps_source="fps")
+            else:
+                # Just one video in the list
+                log_info(f"Using single video from list")
+                background_video_path = background_path[0]
+                if isinstance(background_video_path, dict):
+                    background_video_path = background_video_path.get('path')
+                
+                # Verify the file exists and is readable
+                if not os.path.exists(background_video_path) or os.path.getsize(background_video_path) == 0:
+                    log_error(f"Background video file does not exist or is empty: {background_video_path}")
                     # Create a default background
                     log_warning("Creating default background")
                     background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
+                else:
+                    try:
+                        background_video = VideoFileClip(background_video_path, fps_source="fps")
+                    except Exception as e:
+                        log_error(f"Error loading background video: {str(e)}")
+                        # Create a default background
+                        log_warning("Creating default background")
+                        background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
         else:
             # Single background video or no background
             if background_path and os.path.exists(background_path):
