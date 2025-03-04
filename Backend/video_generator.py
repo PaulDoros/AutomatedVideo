@@ -328,42 +328,27 @@ class VideoGenerator:
             audio_duration = audio_clip.duration
             audio_clip.close()
             
-            # Calculate padded duration with extra buffer to prevent black screens
-            padded_duration = audio_duration + 3.5  # 1s at start + 2.5s at end for safety
+            # Calculate video duration with a small buffer at the end only
+            # We're removing the 1s intro delay and reducing the outro buffer
+            video_duration = audio_duration + 1.0  # Just 1s buffer at the end
             print(colored(f"Original audio duration: {audio_duration:.2f}s", "cyan"))
-            print(colored(f"Padded video duration: {padded_duration:.2f}s (1s intro + 2.5s outro)", "cyan"))
+            print(colored(f"Video duration: {video_duration:.2f}s (with 1s buffer at end)", "cyan"))
             
-            # Apply 1-second delay to the audio
-            delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
-            delayed_audio = AudioFileClip(tts_path).set_start(1.0)  # Delay by 1 second
-
-            # Get the fps from the original audio
-            original_fps = delayed_audio.fps
-
-            # Create silence for padding
-            silence = AudioClip(lambda t: 0, duration=padded_duration)
-
-            # Composite audio with delayed speech
-            final_audio = CompositeAudioClip([silence, delayed_audio])
-
-            # Explicitly set the fps when writing
-            final_audio.write_audiofile(delayed_audio_path, fps=original_fps)
-            delayed_audio.close()
-            final_audio.close()
+            # Use the original audio file directly without padding or delay
+            # This avoids the strange sound at the end
             
-            # Generate subtitles with 1-second delay
+            # Generate subtitles without delay
             subtitles_text = script
-            delayed_subtitles_path = await self._generate_delayed_subtitles(
-                script=subtitles_text, 
-                audio_path=delayed_audio_path, 
-                channel_type=channel_type,
-                delay=1.0
+            subtitles_path = generate_subtitles(
+                script=script,
+                audio_path=tts_path,
+                content_type=channel_type
             )
             
-            if not delayed_subtitles_path:
-                raise ValueError("Failed to generate delayed subtitles")
+            if not subtitles_path:
+                raise ValueError("Failed to generate subtitles")
             
-            # Get background videos with padded duration
+            # Get background videos with video duration
             background_paths = await self._process_background_videos(channel_type, script)
             if not background_paths:
                 raise ValueError("Failed to get background videos")
@@ -372,13 +357,13 @@ class VideoGenerator:
             if isinstance(background_paths, str):
                 background_paths = [background_paths]
             
-            # Generate video with padded duration - pass the exact padded duration
+            # Generate video with the calculated duration
             output_path = generate_video(
                 background_paths,
-                delayed_audio_path,
-                delayed_subtitles_path,
+                tts_path,  # Use original audio file
+                subtitles_path,  # Use original subtitles without delay
                 channel_type,
-                target_duration=padded_duration  # Explicitly pass the padded duration
+                target_duration=video_duration
             )
             
             if not output_path:
@@ -387,8 +372,12 @@ class VideoGenerator:
             # Save output
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             final_path = f"output/videos/{channel_type}_{timestamp}.mp4"
+            latest_path = f"output/videos/{channel_type}_latest.mp4"
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
+            
+            # Save both timestamped and latest version
             shutil.copy2(output_path, final_path)
+            shutil.copy2(output_path, latest_path)
             
             print(colored("\n=== Video Generation Complete ===", "green"))
             return True

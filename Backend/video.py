@@ -104,11 +104,12 @@ def format_time(seconds):
     return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}".replace(".", ",")
 
 def generate_subtitles(script: str, audio_path: str, content_type: str = None) -> str:
-    """Generate SRT subtitles from script with fixed emoji handling"""
+    """Generate SRT subtitles from script with improved timing for better synchronization"""
     try:
         # Get audio duration
         audio = AudioFileClip(audio_path)
         total_duration = audio.duration
+        audio.close()
         
         # Create temp directory
         os.makedirs("temp/subtitles", exist_ok=True)
@@ -127,16 +128,28 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
             line = re.sub(r'^\d+\.\s*', '', line)
             sentences.append(line)
         
+        # Calculate total word count for better timing distribution
+        total_words = sum(len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)]) 
+                          for sentence in sentences)
+        
+        # Allocate time proportionally based on word count
+        # Reserve 90% of the audio duration for subtitles, leaving 10% for natural pauses
+        usable_duration = total_duration * 0.9
+        
         # Write SRT file directly from the original lines
         with open(subtitles_path, "w", encoding="utf-8-sig") as f:
-            current_time = 0
+            current_time = 0.2  # Start with a small initial delay (0.2s)
             
             for i, sentence in enumerate(sentences):
                 # Calculate word count for timing
                 word_count = len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)])
                 
-                # Calculate duration - shorter for better pacing
-                est_duration = max(1.3, min(2.8, word_count * 0.3))
+                # Calculate duration proportionally to word count
+                if total_words > 0:
+                    proportion = word_count / total_words
+                    est_duration = max(1.0, min(4.0, usable_duration * proportion))
+                else:
+                    est_duration = 2.0  # Default duration if no words
                 
                 # Ensure we don't exceed audio duration
                 if current_time + est_duration > total_duration:
@@ -153,14 +166,14 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
                 f.write(f"{start_time} --> {end_time}\n")
                 f.write(f"{sentence}\n\n")
                 
-                # Gap between subtitles
-                current_time += est_duration + 0.15
+                # Gap between subtitles - smaller gap for better flow
+                current_time += est_duration + 0.1
             
-        print(colored(f"Generated {len(sentences)} subtitles", "green"))
+        log_success(f"Generated {len(sentences)} subtitles with improved timing")
         return subtitles_path
     
     except Exception as e:
-        print(colored(f"Error generating subtitles: {str(e)}", "red"))
+        log_error(f"Error generating subtitles: {str(e)}")
         return None
 
 def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
