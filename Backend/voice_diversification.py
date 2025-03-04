@@ -28,7 +28,21 @@ SAMPLE_TEXTS = {
 }
 
 # Emotions for testing
-EMOTIONS = ["neutral", "cheerful", "professional", "friendly", "serious"]
+EMOTIONS = [
+    "neutral", "cheerful", "professional", "friendly", "serious", 
+    "excited", "humorous", "enthusiastic", "playful", "sarcastic", 
+    "witty", "energetic", "animated", "warm", "engaging"
+]
+
+# Emotion mappings for different content types
+CONTENT_EMOTIONS = {
+    "tech_humor": ["humorous", "playful", "witty", "sarcastic", "enthusiastic", "energetic"],
+    "ai_money": ["professional", "serious", "confident", "engaging", "authoritative"],
+    "baby_tips": ["warm", "friendly", "gentle", "reassuring", "nurturing"],
+    "quick_meals": ["enthusiastic", "energetic", "cheerful", "friendly", "engaging"],
+    "fitness_motivation": ["energetic", "motivational", "enthusiastic", "confident", "encouraging"],
+    "default": ["neutral", "friendly", "professional"]
+}
 
 class VoiceDiversification:
     """Voice diversification system for video voiceovers"""
@@ -256,6 +270,11 @@ class VoiceDiversification:
         except Exception as e:
             print(f"Error selecting voice: {str(e)}")
             return "default"
+
+    def get_emotion_for_content(self, content_type):
+        """Get an appropriate emotion for the content type"""
+        emotions = CONTENT_EMOTIONS.get(content_type, CONTENT_EMOTIONS["default"])
+        return random.choice(emotions)
 
 async def test_voice_diversification():
     """Test the voice diversification system"""

@@ -102,17 +102,19 @@ class AudioManager:
     def select_coqui_voice(self, channel_type, gender=None):
         """Select a Coqui TTS voice based on channel type and gender preference"""
         try:
-            # Define emotion mapping for different channel types
-            emotion_map = {
-                'tech_humor': 'friendly',
-                'ai_money': 'professional',
-                'baby_tips': 'warm',
-                'quick_meals': 'cheerful',
-                'fitness_motivation': 'energetic'
-            }
-            
-            # Get appropriate emotion for the channel
-            emotion = emotion_map.get(channel_type, 'neutral')
+            # Get appropriate emotion for the channel using the new emotion selection system
+            if hasattr(self, 'voice_diversifier') and self.voice_diversifier:
+                emotion = self.voice_diversifier.get_emotion_for_content(channel_type)
+            else:
+                # Fallback to basic emotion mapping
+                emotion_map = {
+                    'tech_humor': 'humorous',
+                    'ai_money': 'professional',
+                    'baby_tips': 'warm',
+                    'quick_meals': 'cheerful',
+                    'fitness_motivation': 'energetic'
+                }
+                emotion = emotion_map.get(channel_type, 'neutral')
             
             # Check if we have a cached voice for this channel type
             cache_key = f"{channel_type}_{gender if gender else 'any'}"
@@ -343,10 +345,14 @@ class VideoGenerator:
             if not tts_path:
                 raise ValueError("Failed to generate TTS audio")
             
-            # Trim the end of the audio to remove strange sounds (0.2 seconds from the end)
-            print(colored("Trimming 0.2 seconds from the end of audio to remove artifacts", "blue"))
+            # Trim the end of the audio to remove strange sounds (0.3 seconds from the end)
+            # This helps prevent the audio looping issue
+            print(colored("Trimming 0.3 seconds from the end of audio to remove artifacts and prevent looping", "blue"))
             original_audio = AudioFileClip(tts_path)
-            trimmed_audio = original_audio.subclip(0, original_audio.duration - 0.2)
+            
+            # Ensure we don't trim too much if the audio is short
+            trim_amount = min(0.3, original_audio.duration * 0.02)  # Either 0.3s or 2% of duration, whichever is smaller
+            trimmed_audio = original_audio.subclip(0, original_audio.duration - trim_amount)
             
             # Add 1-second silence at the beginning of the audio to match subtitle delay
             print(colored("Adding 1-second silence at the beginning of audio to match subtitle delay", "blue"))
@@ -355,8 +361,11 @@ class VideoGenerator:
             silence_duration = 1.0
             silence = AudioClip(lambda t: 0, duration=silence_duration)
             
-            # Concatenate silence and original audio
-            delayed_audio = concatenate_audioclips([silence, trimmed_audio])
+            # Add a small silence at the end to prevent audio loop issues
+            end_silence = AudioClip(lambda t: 0, duration=0.5)
+            
+            # Concatenate silence at beginning, trimmed audio, and silence at end
+            delayed_audio = concatenate_audioclips([silence, trimmed_audio, end_silence])
             
             # Save the delayed audio to a temporary file
             delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
@@ -451,6 +460,7 @@ class VideoGenerator:
                 "-c:a", "aac",
                 "-map", "0:v:0",  # Use the entire video track
                 "-map", "1:a:0",  # Use the entire audio track
+                "-af", "afade=t=out:st=" + str(audio_duration - 0.5) + ":d=0.5",  # Add fade out to audio
                 output_path
             ]
             subprocess.run(cmd, check=True)
@@ -516,13 +526,30 @@ class VideoGenerator:
                     # Check if the model supports multiple speakers
                     has_speaker_support = hasattr(self.audio_manager.voice_diversifier.api, 'speakers') and self.audio_manager.voice_diversifier.api.speakers
                     
-                    # Set speed based on content type - faster for humorous content
-                    speed_multiplier = 1.0
+                    # Set speed based on content type and emotion
+                    # Dynamically adjust speed based on emotion and content type
+                    speed_multiplier = 1.0  # Default speed
+                    
+                    # Adjust speed based on emotion
+                    if emotion in ["humorous", "witty", "sarcastic"]:
+                        # Slightly faster for joke delivery
+                        speed_multiplier = 1.05
+                    elif emotion in ["energetic", "enthusiastic"]:
+                        speed_multiplier = 1.1
+                    elif emotion in ["playful"]:
+                        speed_multiplier = 1.03
+                    
+                    # Further adjust based on content type
                     if channel_type == "tech_humor":
-                        speed_multiplier = 1.1  # Changed from 1.25 to 1.1 for better clarity while still being fast
-                        print(colored(f"Using speed multiplier of {speed_multiplier} for tech humor content", "blue"))
-                    elif emotion == "cheerful":
-                        speed_multiplier = 1.1  # Slightly faster for cheerful emotion
+                        # For tech humor, adjust speed based on emotion
+                        if emotion in ["humorous", "witty", "sarcastic"]:
+                            # Jokes need good timing - not too fast
+                            speed_multiplier = 1.05
+                        else:
+                            # For other emotions in tech humor
+                            speed_multiplier = 1.08
+                    
+                    print(colored(f"Using speed multiplier of {speed_multiplier} for {emotion} {channel_type} content", "blue"))
                     
                     # Confirm we're using XTTS v2
                     print(colored("Confirming TTS model: Using XTTS v2 for high-quality voice generation", "blue"))
@@ -580,6 +607,10 @@ class VideoGenerator:
                             for audio_file in sentence_audio_files:
                                 segment = AudioSegment.from_wav(audio_file)
                                 combined += segment
+                            
+                            # Add a small silence at the end to prevent audio loop issues
+                            silence = AudioSegment.silent(duration=300)  # 300ms silence
+                            combined = combined + silence
                             
                             # Save combined audio
                             combined.export(output_path, format="wav")
