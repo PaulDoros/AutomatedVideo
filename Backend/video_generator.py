@@ -725,86 +725,104 @@ class VideoGenerator:
             return None
 
     async def _process_background_videos(self, channel_type, script=None):
-        """Process background videos with AI suggestions and content analysis"""
+        """Process background videos for the channel"""
         try:
-            # First check for local videos
-            local_path = os.path.join("assets", "videos", channel_type)
-            if os.path.exists(local_path):
-                videos = [f for f in os.listdir(local_path) if f.endswith(('.mp4', '.mov'))]
-                if videos:
-                    video_paths = [os.path.abspath(os.path.join(local_path, v)) for v in videos]
-                    print(colored(f"Using {len(video_paths)} local videos from {local_path}", "green"))
-                    return video_paths
-
-            # Get video suggestions from GPT
-            gpt_suggestions = await self._get_video_suggestions(script)
+            print(colored("\n=== Processing Background Videos ===", "blue"))
             
-            # Also get our content analysis
-            script_analysis = self._analyze_script_content(script)
-            analysis_terms = self._generate_search_terms(script_analysis)
+            # Create directory if it doesn't exist
+            video_dir = os.path.join("assets", "videos", channel_type)
+            os.makedirs(video_dir, exist_ok=True)
             
-            # Combine and prioritize search terms
-            search_terms = []
+            # Check if we have local videos first
+            local_videos = [os.path.join(video_dir, f) for f in os.listdir(video_dir) 
+                           if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(video_dir, f)) > 0]
             
-            # First add GPT suggestions as they're more specific
-            if gpt_suggestions:
-                search_terms.extend([s['term'] for s in gpt_suggestions])
-            
-            # Then add our analyzed terms as backup
-            search_terms.extend(analysis_terms)
-            
-            # Deduplicate while preserving order
-            search_terms = list(dict.fromkeys(search_terms))
-            
-            video_urls = []
-            max_videos = 8
-            
-            # Allocate more videos for GPT suggestions
-            videos_per_term = 2 if len(search_terms) > 4 else 3
-            
-            # Create channel directory
-            channel_dir = os.path.join("assets", "videos", channel_type)
-            os.makedirs(channel_dir, exist_ok=True)
-            
-            # Search for each term
-            for term in search_terms:
-                if len(video_urls) >= max_videos:
-                    break
+            if local_videos:
+                # Use existing videos if we have at least 4
+                if len(local_videos) >= 4:
+                    print(colored(f"Using {len(local_videos)} local videos from {video_dir}", "green"))
+                    
+                    # Instead of returning all videos, return just one video that's long enough
+                    # This avoids the complex video combination that's causing issues
+                    for video_path in local_videos:
+                        try:
+                            # Check if the video is long enough
+                            video = VideoFileClip(video_path)
+                            if video.duration >= 15:  # At least 15 seconds
+                                video.close()
+                                print(colored(f"Using single video: {video_path}", "green"))
+                                return [video_path]
+                            video.close()
+                        except Exception as e:
+                            print(colored(f"Error checking video {video_path}: {str(e)}", "yellow"))
+                    
+                    # If we didn't find a long enough video, return the first one
+                    print(colored(f"Using first video: {local_videos[0]}", "green"))
+                    return [local_videos[0]]
                 
-                print(colored(f"Searching for videos matching: {term}", "blue"))
-                urls = await self._search_and_save_videos(term, channel_dir, videos_per_term)
-                
-                if urls:
-                    video_urls.extend(urls)
-                    print(colored(f"Found {len(urls)} videos for '{term}'", "green"))
-                else:
-                    print(colored(f"No videos found for '{term}'", "yellow"))
+                # If we have some videos but not enough, use what we have
+                if local_videos:
+                    print(colored(f"Using {len(local_videos)} local videos", "green"))
+                    return [local_videos[0]]  # Just use the first one to avoid combination issues
             
-            if video_urls:
-                # Randomize but ensure we have variety
-                grouped_videos = {}
-                for url in video_urls:
-                    term = next((t for t in search_terms if t.lower() in url.lower()), 'other')
-                    grouped_videos.setdefault(term, []).append(url)
+            # If we don't have local videos, try to get suggestions from GPT
+            if script:
+                print(colored("No local videos found, getting suggestions from GPT", "yellow"))
                 
-                # Take videos from each group to ensure variety
-                final_videos = []
-                while len(final_videos) < max_videos and grouped_videos:
-                    for term in list(grouped_videos.keys()):
-                        if grouped_videos[term]:
-                            final_videos.append(grouped_videos[term].pop(0))
-                            if not grouped_videos[term]:
-                                del grouped_videos[term]
-                        if len(final_videos) >= max_videos:
+                # Analyze script content
+                script_analysis = self._analyze_script_content(script)
+                
+                # Get video suggestions from GPT
+                suggestions = await self._get_video_suggestions(script)
+                
+                if suggestions:
+                    # Generate search terms from suggestions and script analysis
+                    search_terms = []
+                    
+                    # Add GPT suggestions first (they're usually better)
+                    for suggestion in suggestions:
+                        if suggestion.startswith('**') and suggestion.endswith('**'):
+                            term = suggestion.strip('*').strip()
+                            if term and len(term) > 3:
+                                search_terms.append(term)
+                    
+                    # Add terms from script analysis as backup
+                    analysis_terms = self._generate_search_terms(script_analysis)
+                    search_terms.extend(analysis_terms)
+                    
+                    # Deduplicate terms
+                    search_terms = list(dict.fromkeys(search_terms))
+                    
+                    # Limit to 4 terms for variety
+                    search_terms = search_terms[:4]
+                    
+                    # Search for videos
+                    final_videos = []
+                    for term in search_terms:
+                        videos = await self._search_and_save_videos(term, video_dir, count=1)
+                        if videos:
+                            final_videos.extend(videos)
+                        
+                        # Stop once we have at least one video
+                        if len(final_videos) >= 1:
                             break
-                
-                return final_videos
+                    
+                    if final_videos:
+                        print(colored(f"Found {len(final_videos)} videos from search", "green"))
+                        return [final_videos[0]]  # Just use the first one to avoid combination issues
             
-            return self._create_default_background()
-
+            # If all else fails, create a default background
+            print(colored("No videos found, creating default background", "yellow"))
+            return self._create_default_background(channel_type)
+            
         except Exception as e:
-            print(colored(f"Background video processing failed: {str(e)}", "red"))
-            return None
+            print(colored(f"Error processing background videos: {str(e)}", "red"))
+            # Create a default background as fallback
+            try:
+                return self._create_default_background(channel_type)
+            except:
+                print(colored("Failed to create default background", "red"))
+                return []
 
     async def _search_and_save_videos(self, term, directory, count):
         """Helper function to search and save videos"""
@@ -827,31 +845,99 @@ class VideoGenerator:
             print(colored(f"Search failed for '{term}': {str(e)}", "yellow"))
             return []
 
-    def _create_default_background(self):
-        """Create a default black background video"""
+    def _create_default_background(self, channel_type, duration=15):
+        """Create a default background video if no suitable videos are found"""
         try:
-            # Create default background path
-            default_path = os.path.join("assets", "videos", "default_background.mp4")
-            os.makedirs(os.path.dirname(default_path), exist_ok=True)
+            print(colored("\n=== Creating Default Background Video ===", "blue"))
             
-            # Create a black background clip
-            clip = ColorClip(
-                size=(1080, 1920),  # Vertical format (9:16)
-                color=(0, 0, 0),
-                duration=60
+            # Create directory if it doesn't exist
+            os.makedirs("temp/backgrounds", exist_ok=True)
+            
+            # Generate a unique filename
+            default_path = f"temp/backgrounds/default_{channel_type}_{int(time.time())}.mp4"
+            
+            # Create a gradient background based on channel type
+            from thumbnail_generator import ThumbnailGenerator
+            thumbnail_gen = ThumbnailGenerator()
+            
+            # Select colors based on channel type
+            colors = {
+                'tech_humor': ['#3a1c71', '#d76d77'],  # Purple gradient
+                'ai_money': ['#4e54c8', '#8f94fb'],    # Blue gradient
+                'baby_tips': ['#11998e', '#38ef7d'],   # Green gradient
+                'quick_meals': ['#e1eec3', '#f05053'], # Yellow-red gradient
+                'fitness_motivation': ['#355c7d', '#6c5b7b']  # Cool blue-purple gradient
+            }
+            
+            # Get colors for this channel or use default
+            gradient_colors = colors.get(channel_type, ['#2b5876', '#4e4376'])
+            
+            # Create gradient image
+            gradient = thumbnail_gen.create_gradient(gradient_colors)
+            
+            # Convert to numpy array for MoviePy
+            gradient_array = np.array(gradient)
+            
+            # Create a clip with the gradient
+            clip = ImageClip(gradient_array).set_duration(duration)
+            
+            # Resize to vertical format (9:16)
+            clip = clip.resize((1080, 1920))
+            
+            # Add subtle animation (zoom effect)
+            # Use a simpler approach without lambda functions
+            clip = clip.resize(1.05)  # 5% zoom
+            
+            # Add a subtle text label based on channel type
+            channel_labels = {
+                'tech_humor': "Tech Tips",
+                'ai_money': "AI Insights",
+                'baby_tips': "Parenting Tips",
+                'quick_meals': "Quick Recipe",
+                'fitness_motivation': "Fitness Tips"
+            }
+            
+            label = channel_labels.get(channel_type, "Tips & Tricks")
+            
+            # Create text clip
+            txt_clip = TextClip(
+                label,
+                fontsize=70,
+                color='white',
+                font='Arial-Bold',
+                stroke_color='black',
+                stroke_width=2,
+                method='label'  # Faster than 'caption'
             )
             
-            # Write the video file
-            clip.write_videofile(
+            # Position text at the bottom
+            txt_clip = txt_clip.set_position(('center', 1700)).set_duration(duration)
+            
+            # Combine clips
+            final_clip = CompositeVideoClip([clip, txt_clip], size=(1080, 1920))
+            
+            # Detect number of CPU cores for optimal threading
+            cpu_count = multiprocessing.cpu_count()
+            optimal_threads = max(4, min(cpu_count - 1, 8))  # Use at least 4 threads, but leave 1 core free
+            
+            # Write video file with optimized settings
+            final_clip.write_videofile(
                 default_path,
-                fps=30,
                 codec='libx264',
+                fps=30,
+                preset='faster',  # Use faster preset for better performance
                 audio=False,
-                threads=4
+                ffmpeg_params=["-shortest", "-avoid_negative_ts", "1"],  # Prevent warnings
+                threads=optimal_threads
             )
             
             # Clean up
-            clip.close()
+            try:
+                clip.close()
+                txt_clip.close()
+                final_clip.close()
+            except:
+                pass  # Ignore errors during cleanup
             
             print(colored("Created default background video", "yellow"))
             return [default_path]

@@ -163,26 +163,26 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         print(colored(f"Error generating subtitles: {str(e)}", "red"))
         return None
 
-def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
+def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
     """Combine multiple videos with smooth transitions for YouTube Shorts"""
     try:
+        log_section("Video Combination", "🔄")
+        
         # Calculate total target duration
         total_duration = audio_duration if audio_duration else target_duration
         
         # IMPORTANT: Slightly reduce the target duration to prevent black fade at end
-        # This ensures the video ends on the last frame without fading to black
         adjusted_duration = total_duration - 0.1  # Reduce by 0.1 seconds
         
-        print(colored("\n=== Video Combination Debug Info ===", "blue"))
-        print(colored(f"Audio duration: {total_duration:.2f}s", "cyan"))
-        print(colored(f"Target duration: {target_duration:.2f}s", "cyan"))
-        print(colored(f"Adjusted duration: {adjusted_duration:.2f}s", "cyan"))
-        print(colored(f"Number of videos: {len(video_paths)}", "cyan"))
+        log_info(f"Audio duration: {total_duration:.2f}s")
+        log_info(f"Target duration: {target_duration:.2f}s")
+        log_info(f"Adjusted duration: {adjusted_duration:.2f}s")
+        log_info(f"Number of videos: {len(video_paths)}")
         
         # Calculate how long each video should be
         num_videos = len(video_paths)
         segment_duration = adjusted_duration / num_videos
-        print(colored(f"Segment duration per video: {segment_duration:.2f}s", "cyan"))
+        log_info(f"Segment duration per video: {segment_duration:.2f}s")
         
         # Keep track of current position in the timeline
         current_time = 0
@@ -193,34 +193,32 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
         # Transition duration (shorter for smoother transitions)
         transition_duration = 0.5
         
-        # Store the last processed clip for potential end-frame freeze
-        last_processed_clip = None
-        last_video_path = None
-        
+        # Process each video
         for i, video_data in enumerate(video_paths):
+            log_processing(f"Processing video {i+1}/{num_videos}")
+            
+            # Get path (handle both dict and string formats)
+            if isinstance(video_data, dict):
+                video_path = video_data.get('path')
+            else:
+                video_path = video_data
+            
+            log_info(f"Video path: {video_path}")
+            
+            # Calculate how much of this video to use
+            this_segment_duration = min(segment_duration, adjusted_duration - current_time)
+            if this_segment_duration <= 0:
+                log_warning("Skipping video (no time left)")
+                continue
+            
             try:
-                print(colored(f"\n=== Processing Video {i+1}/{num_videos} ===", "blue"))
+                # Verify file exists and is readable before loading
+                if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+                    raise ValueError(f"Video file does not exist or is empty: {video_path}")
                 
-                # Get path (handle both dict and string formats)
-                if isinstance(video_data, dict):
-                    video_path = video_data.get('path')
-                else:
-                    video_path = video_data
-                
-                print(colored(f"Video path: {video_path}", "cyan"))
-                
-                # Store the last video path for potential reuse
-                last_video_path = video_path
-                
-                # Load video
-                video = VideoFileClip(video_path)
-                print(colored(f"Video duration: {video.duration:.2f}s", "cyan"))
-                
-                # Calculate how much of this video to use
-                this_segment_duration = min(segment_duration, adjusted_duration - current_time)
-                if this_segment_duration <= 0:
-                    print(colored("Skipping video (no time left)", "yellow"))
-                    continue
+                # Load video with explicit fps to avoid warnings
+                video = VideoFileClip(video_path, fps_source="fps")
+                log_info(f"Video duration: {video.duration:.2f}s")
                 
                 # Determine which portion to use
                 video_duration = video.duration
@@ -246,13 +244,13 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                     if video_start > latest_possible_start:
                         video_start = usable_start
                 
-                print(colored(f"Using segment: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s", "cyan"))
+                log_info(f"Using segment: {video_start:.2f}s to {video_start + this_segment_duration:.2f}s")
+                
+                # Ensure we don't try to read beyond the video's actual duration
+                end_time = min(video_start + this_segment_duration + (transition_duration if i < num_videos - 1 else 0), video_duration)
                 
                 # Create clip - Use explicit values instead of lambda functions
-                clip = video.subclip(video_start, video_start + this_segment_duration + (transition_duration if i < num_videos - 1 else 0))
-                
-                # Store the last clip for potential freeze frame
-                last_processed_clip = clip
+                clip = video.subclip(video_start, end_time)
                 
                 # Resize to maintain height
                 clip = clip.resize(height=1920)
@@ -266,7 +264,6 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                 
                 # If video is too narrow, zoom to fill width
                 if clip.w < 1080:
-                    scale_factor = 1080 / clip.w
                     clip = clip.resize(width=1080)
                     # If this made it too tall, crop height
                     if clip.h > 1920:
@@ -277,7 +274,6 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                 
                 # Apply subtle zoom effect (simple version without lambda)
                 if i % 2 == 0:  # Alternate between zoom in and out
-                    # For zoom effects, we'll use a simpler approach
                     clip = clip.resize(1.02)  # Just a static 2% zoom
                 else:
                     clip = clip.resize(1.03)  # 3% zoom
@@ -286,7 +282,6 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                 clip = clip.fx(vfx.colorx, 1.05)  # Simpler than using enhancer
                 
                 # Calculate clip position with overlapping for transitions
-                # Each clip starts a bit before the previous one ends
                 clip_start = current_time
                 if i > 0:
                     clip_start -= transition_duration
@@ -296,20 +291,18 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                 
                 # Update current time
                 current_time += this_segment_duration
-                print(colored(f"Current total time: {current_time:.2f}s / {adjusted_duration:.2f}s", "green"))
+                log_success(f"Current total time: {current_time:.2f}s / {adjusted_duration:.2f}s")
+                
+                # Close the original video to free resources
+                video.close()
                 
             except Exception as e:
-                print(colored(f"Error processing video {i+1}:", "red"))
-                print(colored(f"Error details: {str(e)}", "red"))
-                print(colored("Creating fallback styled clip", "yellow"))
+                log_error(f"Error processing video {i+1}: {str(e)}")
+                log_warning("Creating fallback styled clip")
                 
-                # Create a styled fallback clip instead of plain black
+                # Create a styled fallback clip
                 try:
-                    # Create styled background using thumbnail generator principles
-                    from thumbnail_generator import ThumbnailGenerator
-                    thumbnail_gen = ThumbnailGenerator()
-                    
-                    # Generate appropriate background based on segment index
+                    # Create a gradient background
                     colors = [
                         ['#3a1c71', '#d76d77'],  # Purple gradient
                         ['#4e54c8', '#8f94fb'],  # Blue gradient
@@ -318,113 +311,127 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=2):
                         ['#355c7d', '#6c5b7b']   # Cool blue-purple gradient
                     ]
                     
+                    # Create a simple color clip
                     color_choice = i % len(colors)
-                    gradient = thumbnail_gen.create_gradient(colors[color_choice])
+                    color1 = colors[color_choice][0]
+                    color2 = colors[color_choice][1]
                     
-                    # Convert to numpy array for MoviePy
-                    gradient_array = np.array(gradient)
+                    # Convert hex to RGB
+                    def hex_to_rgb(hex_color):
+                        hex_color = hex_color.lstrip('#')
+                        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
                     
-                    # Create a nicer fallback clip with gradient
-                    fallback_clip = ImageClip(gradient_array, duration=this_segment_duration)
-                    fallback_clip = fallback_clip.resize((1080, 1920))
+                    rgb_color = hex_to_rgb(color1)  # Use first color
+                    
+                    # Create a color clip
+                    fallback_clip = ColorClip(size=(1080, 1920), color=rgb_color, duration=this_segment_duration)
                     
                     # Add a subtle text label
-                    txt_clip = TextClip("Next tip...", fontsize=70, color='white', 
-                                       font='Arial-Bold', stroke_color='black', stroke_width=2)
+                    txt_clip = TextClip(
+                        "Next tip...", 
+                        fontsize=70, 
+                        color='white',
+                        font='Arial-Bold', 
+                        stroke_color='black', 
+                        stroke_width=2
+                    )
                     txt_clip = txt_clip.set_position(('center', 'center')).set_duration(this_segment_duration)
                     
                     fallback_clip = CompositeVideoClip([fallback_clip, txt_clip])
-                    
-                    # Store this as the last processed clip
-                    last_processed_clip = fallback_clip
                     
                     # Add clip with position
                     positioned_clips.append((fallback_clip, current_time))
                     current_time += this_segment_duration
                     
-                except Exception:
-                    # If styled clip fails, use simple color clip
-                    fallback_clip = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=this_segment_duration)
-                    last_processed_clip = fallback_clip
+                except Exception as inner_e:
+                    log_error(f"Error creating styled clip: {str(inner_e)}")
+                    # Use a simple black clip as last resort
+                    fallback_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=this_segment_duration)
                     positioned_clips.append((fallback_clip, current_time))
                     current_time += this_segment_duration
         
-        print(colored("\n=== Creating Final Composite Video ===", "blue"))
-        print(colored(f"Number of clips to combine: {len(positioned_clips)}", "cyan"))
+        log_section("Creating Final Composite Video", "🎬")
+        log_info(f"Number of clips to combine: {len(positioned_clips)}")
         
-        # SPECIAL HANDLING FOR LAST FRAME: 
-        # Instead of adding a freeze frame, extend the last clip to cover the full duration
-        # This ensures the video ends on the actual last frame of the last clip
-        if positioned_clips:
-            last_clip, last_start = positioned_clips[-1]
-            
-            # Calculate how much we need to extend the last clip
-            current_end = last_start + last_clip.duration
-            extension_needed = adjusted_duration - current_end + 0.5  # Add a small buffer
-            
-            if extension_needed > 0:
-                print(colored(f"Extending last clip by {extension_needed:.2f}s to prevent black end frame", "yellow"))
-                
-                try:
-                    # Get the last frame of the last clip
-                    last_frame_time = max(0, min(last_clip.duration - 0.05, last_clip.duration * 0.9))
-                    last_frame = last_clip.get_frame(last_frame_time)
-                    
-                    # Create a freeze frame of the exact last frame
-                    freeze_clip = ImageClip(last_frame, duration=extension_needed)
-                    
-                    # Position it to start exactly when the last clip ends (minus a tiny overlap)
-                    freeze_start = current_end - 0.05  # Small overlap for smooth transition
-                    freeze_clip = freeze_clip.set_start(freeze_start)
-                    
-                    # Add to positioned clips
-                    positioned_clips.append((freeze_clip, freeze_start))
-                    print(colored("✓ Extended last clip with its final frame", "green"))
-                except Exception as e:
-                    print(colored(f"Error extending last clip: {str(e)}", "yellow"))
+        # Check if we have any clips
+        if not positioned_clips:
+            log_error("No clips to combine")
+            # Create a default black clip
+            default_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=adjusted_duration)
+            positioned_clips.append((default_clip, 0))
         
-        # Create a list of clips with set_start times to handle proper overlapping transitions
+        # Check if we need to extend the video to match the target duration
+        last_clip, last_start = positioned_clips[-1]
+        current_end = last_start + last_clip.duration
+        
+        if current_end < adjusted_duration:
+            extension_needed = adjusted_duration - current_end
+            log_warning(f"Video is too short by {extension_needed:.2f}s, adding padding")
+            
+            # Create a simple color clip for padding
+            padding_clip = ColorClip(size=(1080, 1920), color=(0, 0, 0), duration=extension_needed + 0.5)
+            positioned_clips.append((padding_clip, current_end - 0.1))  # Small overlap
+        
+        # Create a list of clips with set_start times
         composite_clips = []
         for clip, start_time in positioned_clips:
-            # Set the start time for each clip for proper overlapping
             composite_clips.append(clip.set_start(start_time))
         
         # Create composite with all clips
         final_clip = CompositeVideoClip(composite_clips, size=(1080, 1920))
-        print(colored(f"Final clip duration: {final_clip.duration:.2f}s", "cyan"))
+        log_info(f"Final clip duration: {final_clip.duration:.2f}s")
         
-        # IMPORTANT: Set exact duration to match the adjusted duration
-        # This prevents MoviePy from adding any automatic fade at the end
+        # Set exact duration to match the adjusted duration
         if abs(final_clip.duration - adjusted_duration) > 0.1:
-            print(colored(f"Setting exact duration to {adjusted_duration:.2f}s", "yellow"))
+            log_warning(f"Setting exact duration to {adjusted_duration:.2f}s")
             final_clip = final_clip.set_duration(adjusted_duration)
         
-        # Save combined video with specific end behavior
+        # Save combined video
         output_path = "temp_combined.mp4"
-        print(colored(f"\nSaving to: {output_path}", "blue"))
+        log_info(f"Saving to: {output_path}")
         
-        # IMPORTANT: Disable any automatic fades by setting specific parameters
+        # Detect optimal thread count
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        optimal_threads = max(4, min(cpu_count - 1, 16))
+        log_info(f"Using {optimal_threads} threads for rendering")
+        
+        # Write video file with optimized settings
+        start_time = time.time()
+        log_processing("Rendering final video... This may take a while")
+        
         final_clip.write_videofile(
             output_path,
-            threads=n_threads,
+            threads=optimal_threads,
             codec='libx264',
             audio=False,
             fps=30,
-            ffmpeg_params=["-shortest"]  # This helps prevent extra frames
+            preset='faster',
+            ffmpeg_params=["-shortest", "-avoid_negative_ts", "1"]
         )
         
-        # Clean up
-        print(colored("\nCleaning up resources...", "blue"))
-        for clip, _ in positioned_clips:
-            clip.close()
-        final_clip.close()
+        elapsed_time = time.time() - start_time
+        log_success(f"Video rendered in {elapsed_time:.1f} seconds")
         
+        # Clean up resources
+        log_info("Cleaning up resources...")
+        for clip, _ in positioned_clips:
+            try:
+                clip.close()
+            except:
+                pass
+        
+        try:
+            final_clip.close()
+        except:
+            pass
+        
+        log_success("Video combination complete")
         return output_path
         
     except Exception as e:
-        print(colored("\n=== Error in combine_videos ===", "red"))
-        print(colored(f"Error type: {type(e).__name__}", "red"))
-        print(colored(f"Error details: {str(e)}", "red"))
+        log_error(f"Error in combine_videos: {str(e)}")
+        log_error(traceback.format_exc())
         return None
 
 def get_background_music(content_type: str, duration: float = None) -> str:
@@ -1128,18 +1135,43 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
             log_info(f"Calculated video duration: {video_duration:.2f}s (audio + buffer)")
         
         # Handle different background path formats
-        if isinstance(background_path, list):
-            # Multiple background videos
-            log_info(f"Combining {len(background_path)} background videos", "🔄")
-            background_video_path = combine_videos(background_path, audio_duration, video_duration)
-            if not background_video_path:
-                raise ValueError("Failed to combine background videos")
-            background_video = VideoFileClip(background_video_path)
-        else:
-            # Single background video
-            log_info(f"Using single background video: {background_path}")
-            background_video = VideoFileClip(background_path)
+        if isinstance(background_path, list) and len(background_path) > 0:
+            # Use the first video from the list instead of trying to combine them
+            log_info(f"Using first video from list of {len(background_path)}")
+            background_video_path = background_path[0]
             
+            # Verify the file exists and is readable
+            if not os.path.exists(background_video_path) or os.path.getsize(background_video_path) == 0:
+                log_error(f"Background video file does not exist or is empty: {background_video_path}")
+                # Create a default background
+                log_warning("Creating default background")
+                background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
+            else:
+                try:
+                    background_video = VideoFileClip(background_video_path, fps_source="fps")
+                except Exception as e:
+                    log_error(f"Error loading background video: {str(e)}")
+                    # Create a default background
+                    log_warning("Creating default background")
+                    background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
+        else:
+            # Single background video or no background
+            if background_path and os.path.exists(background_path):
+                log_info(f"Using single background video: {background_path}")
+                try:
+                    background_video = VideoFileClip(background_path, fps_source="fps")
+                except Exception as e:
+                    log_error(f"Error loading background video: {str(e)}")
+                    # Create a default background
+                    log_warning("Creating default background")
+                    background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
+            else:
+                # Create a default background
+                log_warning("No valid background video provided, creating default")
+                background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
+        
+        # Process the background video
+        try:
             # Resize and crop to vertical format
             log_processing("Resizing video to vertical format")
             background_video = resize_to_vertical(background_video)
@@ -1153,6 +1185,11 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
             if background_video.duration > video_duration:
                 log_processing(f"Trimming background video from {background_video.duration:.2f}s to {video_duration:.2f}s")
                 background_video = background_video.subclip(0, video_duration)
+        except Exception as e:
+            log_error(f"Error processing background video: {str(e)}")
+            # Create a default background
+            log_warning("Creating default background due to processing error")
+            background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
         
         # Set audio
         log_processing("Adding audio to video")
@@ -1181,6 +1218,13 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         log_processing("Rendering final video... This may take a while")
         start_time = time.time()
         
+        # Detect number of CPU cores for optimal threading
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        optimal_threads = max(4, min(cpu_count - 1, 16))  # Use at least 4 threads, but leave 1 core free
+        
+        log_info(f"Using {optimal_threads} threads for video rendering")
+        
         video_with_subtitles.write_videofile(
             output_path,
             codec='libx264',
@@ -1188,8 +1232,9 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
             temp_audiofile='temp_audio.m4a',
             remove_temp=True,
             fps=30,
-            threads=4,
-            ffmpeg_params=["-shortest"]  # This helps prevent extra frames
+            threads=optimal_threads,
+            preset='faster',  # Use faster preset for better performance
+            ffmpeg_params=["-shortest", "-avoid_negative_ts", "1"]  # This helps prevent extra frames and warnings
         )
         
         elapsed_time = time.time() - start_time
@@ -1197,10 +1242,13 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         
         # Clean up
         log_info("Cleaning up resources...")
-        background_video.close()
-        video_with_audio.close()
-        video_with_subtitles.close()
-        audio.close()
+        try:
+            background_video.close()
+            video_with_audio.close()
+            video_with_subtitles.close()
+            audio.close()
+        except Exception as e:
+            log_warning(f"Error during cleanup: {str(e)}")
         
         log_success("Video generation complete", "🎉")
         return output_path

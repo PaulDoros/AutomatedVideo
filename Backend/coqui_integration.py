@@ -71,12 +71,12 @@ class CoquiTTSAPI:
             
             # Use context manager for PyTorch loading
             with self._torch_load_context():
-                # Configure TTS with appropriate settings based on device
-                self.tts = TTS(
-                    model_name=model_name,
-                    progress_bar=True,
-                    gpu=(self.device == "cuda")
-                )
+                # Initialize TTS without gpu parameter (which is deprecated)
+                self.tts = TTS(model_name=model_name, progress_bar=True)
+                
+                # Move model to appropriate device after initialization
+                if self.device == "cuda":
+                    self.tts.to(self.device)
             
             # Store model capabilities
             self.is_multi_speaker = hasattr(self.tts, "speakers") and self.tts.speakers is not None
@@ -214,6 +214,10 @@ class CoquiTTSAPI:
                     language = "en"  # Fallback to English if language not supported
                 tts_kwargs["language"] = language
             
+            # Generate temporary file path for raw output
+            temp_output_path = output_path + ".temp.wav"
+            tts_kwargs["file_path"] = temp_output_path
+            
             # Use asyncio to run TTS in thread pool
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
@@ -221,7 +225,45 @@ class CoquiTTSAPI:
                 lambda: self.tts.tts_to_file(**tts_kwargs)
             )
             
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            if os.path.exists(temp_output_path) and os.path.getsize(temp_output_path) > 0:
+                # Process the audio to trim artifacts
+                try:
+                    import soundfile as sf
+                    from scipy.io import wavfile
+                    import numpy as np
+                    
+                    # Read the audio file
+                    data, samplerate = sf.read(temp_output_path)
+                    
+                    # Trim the end by 0.15 seconds to remove artifacts
+                    trim_samples = int(0.15 * samplerate)
+                    if len(data) > trim_samples:
+                        trimmed_data = data[:-trim_samples]
+                        
+                        # Apply a short fade out to the end to prevent clicks
+                        fade_samples = min(int(0.05 * samplerate), len(trimmed_data))
+                        if fade_samples > 0:
+                            fade_curve = np.linspace(1.0, 0.0, fade_samples)
+                            trimmed_data[-fade_samples:] *= fade_curve[:, np.newaxis] if len(trimmed_data.shape) > 1 else fade_curve
+                        
+                        # Write the processed audio to the final output path
+                        sf.write(output_path, trimmed_data, samplerate)
+                        
+                        # Clean up temporary file
+                        os.remove(temp_output_path)
+                        print(colored(f"✓ Trimmed audio to remove end artifacts", "green"))
+                    else:
+                        # If the audio is too short, just use the original
+                        os.rename(temp_output_path, output_path)
+                except ImportError:
+                    # If audio processing libraries aren't available, just use the original file
+                    os.rename(temp_output_path, output_path)
+                    print(colored("Note: Audio processing libraries not available, using untrimmed audio", "yellow"))
+                except Exception as e:
+                    # If processing fails, use the original file
+                    os.rename(temp_output_path, output_path)
+                    print(colored(f"Note: Could not trim audio: {str(e)}", "yellow"))
+                
                 print(colored(f"✓ Generated voice file: {output_path}", "green"))
                 return output_path
             else:
