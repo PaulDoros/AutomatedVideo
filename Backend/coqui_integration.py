@@ -57,6 +57,23 @@ class CoquiTTSAPI:
         finally:
             pass
 
+    @contextmanager
+    def _gpu_context(self):
+        """Context manager for GPU operations"""
+        try:
+            # If using CUDA, ensure we're using the right device
+            if self.device == "cuda" and torch.cuda.is_available():
+                # Set CUDA device to 0 (first GPU)
+                torch.cuda.set_device(0)
+                # Clear CUDA cache to free up memory
+                torch.cuda.empty_cache()
+            yield
+        finally:
+            # Clean up after TTS generation
+            if self.device == "cuda" and torch.cuda.is_available():
+                # Clear CUDA cache again
+                torch.cuda.empty_cache()
+
     def _init_tts(self, model_key: str = None):
         """Initialize TTS with specified model"""
         try:
@@ -146,7 +163,7 @@ class CoquiTTSAPI:
                            emotion: str = "neutral", speed: float = 1.0, output_path: str = None) -> Optional[str]:
         """Generate voice using Coqui TTS"""
         try:
-            # Create output directory
+            # Create temp directory if it doesn't exist
             os.makedirs("temp/tts", exist_ok=True)
             
             # Use custom output path if provided, otherwise generate one
@@ -174,9 +191,13 @@ class CoquiTTSAPI:
             # Apply speed adjustment based on emotion and device
             if self.device == "cuda":
                 # On GPU, we can use higher quality settings
-                if emotion == "cheerful":
+                # Adjust speed based on content type in the output path
+                if "tech_humor" in output_path:
+                    # Faster for tech humor content
+                    tts_kwargs["speed"] = speed * 1.2
+                elif emotion == "cheerful":
                     # Slightly faster for cheerful emotion
-                    tts_kwargs["speed"] = speed * 1.05
+                    tts_kwargs["speed"] = speed * 1.1
                 else:
                     # Normal speed for other emotions
                     tts_kwargs["speed"] = speed
@@ -200,87 +221,29 @@ class CoquiTTSAPI:
                             print(colored(f"Note: Could not apply all quality settings: {str(config_error)}", "yellow"))
             else:
                 # On CPU, prioritize speed
-                tts_kwargs["speed"] = speed
-            
-            # Only add speaker if model is multi-speaker
-            if self.is_multi_speaker:
-                if not speaker and self.speakers:
-                    speaker = self.speakers[0]  # Use first available speaker as default
+                tts_kwargs["speed"] = speed * 1.05  # Slightly faster by default on CPU
+                
+            # Add speaker if provided and supported
+            if speaker and hasattr(self.tts, 'speakers') and speaker in self.tts.speakers:
                 tts_kwargs["speaker"] = speaker
                 
-            # Only add language if model is multilingual
-            if self.is_multilingual:
-                if language not in self.languages:
-                    language = "en"  # Fallback to English if language not supported
+            # Add language if supported
+            if hasattr(self.tts, 'languages') and language in self.tts.languages:
                 tts_kwargs["language"] = language
             
-            # Generate temporary file path for raw output
-            temp_output_path = output_path + ".temp.wav"
-            tts_kwargs["file_path"] = temp_output_path
-            
-            # Use asyncio to run TTS in thread pool
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: self.tts.tts_to_file(**tts_kwargs)
-            )
-            
-            if os.path.exists(temp_output_path) and os.path.getsize(temp_output_path) > 0:
-                # Process the audio to trim artifacts
-                try:
-                    import soundfile as sf
-                    from scipy.io import wavfile
-                    import numpy as np
-                    
-                    # Read the audio file
-                    data, samplerate = sf.read(temp_output_path)
-                    
-                    # Trim the end by 0.15 seconds to remove artifacts
-                    trim_samples = int(0.15 * samplerate)
-                    if len(data) > trim_samples:
-                        trimmed_data = data[:-trim_samples]
-                        
-                        # Apply a short fade out to the end to prevent clicks
-                        fade_samples = min(int(0.05 * samplerate), len(trimmed_data))
-                        if fade_samples > 0:
-                            fade_curve = np.linspace(1.0, 0.0, fade_samples)
-                            trimmed_data[-fade_samples:] *= fade_curve[:, np.newaxis] if len(trimmed_data.shape) > 1 else fade_curve
-                        
-                        # Write the processed audio to the final output path
-                        sf.write(output_path, trimmed_data, samplerate)
-                        
-                        # Clean up temporary file
-                        os.remove(temp_output_path)
-                        print(colored(f"✓ Trimmed audio to remove end artifacts", "green"))
-                    else:
-                        # If the audio is too short, just use the original
-                        os.rename(temp_output_path, output_path)
-                except ImportError:
-                    # If audio processing libraries aren't available, just use the original file
-                    os.rename(temp_output_path, output_path)
-                    print(colored("Note: Audio processing libraries not available, using untrimmed audio", "yellow"))
-                except Exception as e:
-                    # If processing fails, use the original file
-                    os.rename(temp_output_path, output_path)
-                    print(colored(f"Note: Could not trim audio: {str(e)}", "yellow"))
+            # Generate speech
+            with self._gpu_context():
+                self.tts.tts_to_file(**tts_kwargs)
                 
-                print(colored(f"✓ Generated voice file: {output_path}", "green"))
-                return output_path
-            else:
-                raise ValueError("Generated file is empty or does not exist")
+            # Verify the file was created
+            if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+                raise ValueError(f"TTS generation failed or produced an empty file: {output_path}")
                 
+            print(colored(f"✓ Generated voice file: {output_path}", "green"))
+            return output_path
+            
         except Exception as e:
             print(colored(f"Error generating voice: {str(e)}", "red"))
-            
-            # Try fallback model if primary fails
-            if hasattr(self, 'tts') and self.tts.model_name == self.models["xtts_v2"]:
-                print(colored("Attempting fallback to faster model...", "yellow"))
-                if self._init_tts("fast"):
-                    try:
-                        return await self.generate_voice(text, speaker=None, language="en", emotion=emotion, speed=speed, output_path=output_path)
-                    except Exception as fallback_error:
-                        print(colored(f"Fallback also failed: {str(fallback_error)}", "red"))
-                        
             return None
             
     def get_available_voices(self) -> Dict[str, list]:

@@ -919,7 +919,7 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         text_image = create_text_with_emoji(clean_txt, size=(1080, 900))
         if text_image is None:
             return None
-        
+                
         # Convert PIL image to MoviePy clip
         txt_clip = ImageClip(np.array(text_image))
         
@@ -1026,95 +1026,96 @@ def enhance_tts_prompt(script, content_type):
     
     return base_prompt
 
-def process_subtitles(subs_path, base_video):
-    """Process subtitles with clean, instant transitions"""
+def process_subtitles(subs_path, base_video, start_padding=0.0):
+    """Process subtitles and add them to the video with improved styling"""
     try:
-        log_section("Processing Subtitles", "🔤")
+        # Read subtitles
+        subtitle_data = read_subtitles_file(subs_path)
         
-        # Load subtitles - validate they're proper SRT format
-        try:
-            subs = pysrt.open(subs_path)
-            # Filter out any overly long subtitles that might be errors
-            subs = [sub for sub in subs if len(sub.text) < 200]  # Skip any suspiciously long subtitle
-            log_success(f"Found {len(subs)} subtitles")
-        except Exception as e:
-            log_error(f"Error loading subtitles: {str(e)}")
-            return base_video
-        
-        # Pre-render all subtitle images with consistent styling
-        subtitle_data = []
-        
-        log_info("Preparing subtitle images...")
-        for i, sub in enumerate(subs):
-            # Clean subtitle text
-            text = sub.text.replace('\n', ' ').strip().strip('"')
-            if not text:
-                continue
-                
-            # Skip duplicate/combined subtitles (longer than 100 chars)
-            if len(text) > 100:
-                log_warning(f"Skipping long subtitle: {text[:30]}...")
-                continue
-            
-            # Calculate timing
-            start_time = sub.start.ordinal / 1000.0
-            end_time = sub.end.ordinal / 1000.0
-            
-            # Handle last subtitle - make it stay until end of video
-            is_last = (i == len(subs) - 1)
-            if is_last:
-                # ALWAYS extend the last subtitle to the end to prevent black screens
-                end_time = base_video.duration
-                log_success("Extended final subtitle until end of video", "🏁")
-            
-            # Create text image - OPTIMIZED FOR SHORTS
-            # Use a taller image size to accommodate multiple lines
-            text_image = create_text_with_emoji(text, size=(1080, 900))
-            if text_image is None:
-                continue
-                
-            # Store the pre-rendered image
-            subtitle_data.append({
-                'text': text,
-                'image': text_image,
-                'start': start_time,
-                'end': end_time,
-                'is_last': is_last,
-                'is_first': (i == 0)
-            })
-            
-            # Show progress every few subtitles
-            if (i + 1) % 5 == 0 or i == len(subs) - 1:
-                log_progress(i + 1, len(subs), prefix="Subtitle Preparation:", suffix="Complete")
-        
-        # Fast track: If no subtitles, return base video
         if not subtitle_data:
-            log_warning("No valid subtitles found, returning base video")
+            log_error("No valid subtitles found")
             return base_video
+            
+        log_success(f"Found {len(subtitle_data)} subtitles")
         
-        # Create clips for each subtitle with NO transitions
-        log_info("Creating subtitle clips...")
+        # Convert tuple format to dictionary format for easier processing
+        processed_subtitles = []
+        for times, text in subtitle_data:
+            processed_subtitles.append({
+                'start': times[0],
+                'end': times[1],
+                'text': text
+            })
+        
+        # Prepare subtitle images
+        log_info("Preparing subtitle images...")
+        
+        # Extend the last subtitle to the end of the video to prevent it from disappearing too early
+        if processed_subtitles:
+            last_sub = processed_subtitles[-1]
+            video_end = base_video.duration
+            
+            # If the last subtitle ends before the video, extend it
+            if last_sub['end'] < video_end - 0.5:  # Leave a small buffer at the end
+                log_success("Extended final subtitle until end of video")
+                last_sub['end'] = video_end - 0.2  # Small buffer at the very end
+        
+        # Apply start padding offset to all subtitles
+        if start_padding > 0:
+            for sub in processed_subtitles:
+                sub['start'] += start_padding
+                sub['end'] += start_padding
+            log_info(f"Applied {start_padding}s offset to all subtitles for start padding")
+        
+        # Show progress for larger subtitle sets
+        total_subs = len(processed_subtitles)
         subtitle_clips = []
         
-        for i, data in enumerate(subtitle_data):
-            # Convert PIL image to MoviePy clip
-            img_array = np.array(data['image'])
-            duration = data['end'] - data['start']
+        for i, data in enumerate(processed_subtitles):
+            # Create subtitle background with text
+            style = {
+                'font_size': 40,
+                'bg_color': (0, 0, 0, 180),  # Semi-transparent black
+                'text_color': (255, 255, 255),
+                'padding': 15,
+                'border_radius': 10
+            }
             
-            # Create clip with NO fade effects - completely eliminate transitions
-            # Position in the center of the screen (both horizontally and vertically)
-            sub_clip = (ImageClip(img_array)
-                .set_duration(duration)
-                .set_position(('center', 'center'))  # Center in the middle of the screen
-                .set_start(data['start']))
+            # Check if this is the last subtitle
+            is_last = (i == total_subs - 1)
             
-            subtitle_clips.append(sub_clip)
+            try:
+                # Create text image with emoji support
+                text_image = create_text_with_emoji(data['text'], size=(1080, 800))
+                
+                if text_image is None:
+                    continue
+                    
+                # Convert PIL image to MoviePy clip
+                img_array = np.array(text_image)
+                duration = data['end'] - data['start']
+                
+                # Create clip with NO fade effects - completely eliminate transitions
+                # Position in the center of the screen (both horizontally and vertically)
+                sub_clip = (ImageClip(img_array)
+                    .set_duration(duration)
+                    .set_position(('center', 'center'))  # Center in the middle of the screen
+                    .set_start(data['start']))
+                
+                subtitle_clips.append(sub_clip)
+            except Exception as clip_error:
+                log_error(f"Error creating subtitle clip {i+1}: {str(clip_error)}")
             
             # Show progress for larger subtitle sets
-            if len(subtitle_data) > 10 and ((i + 1) % 5 == 0 or i == len(subtitle_data) - 1):
-                log_progress(i + 1, len(subtitle_data), prefix="Creating Subtitle Clips:", suffix="Complete")
+            if total_subs > 5 and (i % 2 == 0 or i == total_subs - 1):
+                log_progress(i + 1, total_subs, prefix="Subtitle Preparation:", suffix="Complete")
         
-        # Create final video with subtitles (no overlay)
+        # If no subtitle clips were created, return the base video
+        if not subtitle_clips:
+            log_warning("No valid subtitle clips were created, returning base video")
+            return base_video
+            
+        # Create final video with subtitles
         log_processing("Compositing final video with centered subtitles")
         final_video = CompositeVideoClip([base_video] + subtitle_clips)
         
@@ -1136,16 +1137,25 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
         audio_duration = audio.duration
         log_info(f"Audio duration: {audio_duration:.2f}s")
         
-        # Use target_duration if provided, otherwise use audio duration plus buffer
+        # Calculate video duration with padding
+        # Note: If using delayed audio (with 1s silence at start), we don't need additional start padding
+        # Check if the audio filename contains 'delayed' which indicates it already has the start padding
+        if '_delayed.' in audio_path:
+            start_padding = 0.0  # No additional start padding needed
+            log_info("Using audio with built-in delay, no additional start padding needed")
+        else:
+            start_padding = 1.0  # 1 second at start
+            
+        end_padding = 3.0    # 3 seconds at end (increased from 2 to 3 seconds)
+        video_duration = audio_duration + start_padding + end_padding
+        log_info(f"Video duration: {video_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)")
+        
+        # Use target_duration if provided, otherwise use calculated duration
         if target_duration:
             log_info(f"Using provided target duration: {target_duration:.2f}s")
             # IMPORTANT: Slightly reduce the target duration to prevent black fade at end
             video_duration = target_duration - 0.1
             log_info(f"Adjusted to {video_duration:.2f}s to prevent black end frame")
-        else:
-            # Add a small buffer to prevent cutting off
-            video_duration = audio_duration + 1.9  # 2.0 - 0.1 for end frame fix
-            log_info(f"Calculated video duration: {video_duration:.2f}s (audio + buffer)")
         
         # Handle different background path formats
         if isinstance(background_path, list) and len(background_path) > 0:
@@ -1198,74 +1208,26 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
             if background_video.duration > video_duration:
                 log_processing(f"Trimming background video from {background_video.duration:.2f}s to {video_duration:.2f}s")
                 background_video = background_video.subclip(0, video_duration)
+            
+            # Add audio to video with delay
+            log_processing("Adding audio to video with delay")
+            # Set the audio to start after the start_padding
+            delayed_audio = audio.set_start(start_padding)
+            video = background_video.set_audio(delayed_audio)
+            
+            # Process subtitles if provided
+            if subtitles_path and os.path.exists(subtitles_path):
+                log_info(f"Adding subtitles to video")
+                # Process subtitles with padding offset
+                video = process_subtitles(subtitles_path, video, start_padding)
+            
+            return video
+            
         except Exception as e:
-            log_error(f"Error processing background video: {str(e)}")
-            # Create a default background
-            log_warning("Creating default background due to processing error")
-            background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
-        
-        # Set audio
-        log_processing("Adding audio to video")
-        video_with_audio = background_video.set_audio(audio)
-        
-        # Add subtitles if provided
-        if subtitles_path:
-            log_info("Adding subtitles to video")
-            video_with_subtitles = process_subtitles(subtitles_path, video_with_audio)
-        else:
-            log_warning("No subtitles provided, skipping subtitle processing")
-            video_with_subtitles = video_with_audio
-        
-        # IMPORTANT: Set exact duration to prevent black frames
-        # This ensures the video ends on the last frame without fading to black
-        if abs(video_with_subtitles.duration - video_duration) > 0.05:
-            log_warning(f"Setting exact duration to {video_duration:.2f}s", "⏱️")
-            video_with_subtitles = video_with_subtitles.set_duration(video_duration)
-        
-        # Write final video with specific parameters to prevent black frames
-        output_path = "temp_output.mp4"
-        log_section(f"Rendering Final Video", "🎥")
-        log_info(f"Output path: {output_path}")
-        
-        # Show a message about rendering time
-        log_processing("Rendering final video... This may take a while")
-        start_time = time.time()
-        
-        # Detect number of CPU cores for optimal threading
-        import multiprocessing
-        cpu_count = multiprocessing.cpu_count()
-        optimal_threads = max(4, min(cpu_count - 1, 16))  # Use at least 4 threads, but leave 1 core free
-        
-        log_info(f"Using {optimal_threads} threads for video rendering")
-        
-        video_with_subtitles.write_videofile(
-            output_path,
-            codec='libx264',
-            audio_codec='aac',
-            temp_audiofile='temp_audio.m4a',
-            remove_temp=True,
-            fps=30,
-            threads=optimal_threads,
-            preset='faster',  # Use faster preset for better performance
-            ffmpeg_params=["-shortest", "-avoid_negative_ts", "1"]  # This helps prevent extra frames and warnings
-        )
-        
-        elapsed_time = time.time() - start_time
-        log_success(f"Video rendered in {elapsed_time:.1f} seconds", "⏱️")
-        
-        # Clean up
-        log_info("Cleaning up resources...")
-        try:
-            background_video.close()
-            video_with_audio.close()
-            video_with_subtitles.close()
-            audio.close()
-        except Exception as e:
-            log_warning(f"Error during cleanup: {str(e)}")
-        
-        log_success("Video generation complete", "🎉")
-        return output_path
-        
+            log_error(f"Error processing video: {str(e)}")
+            log_error(traceback.format_exc())
+            return None
+            
     except Exception as e:
         log_error(f"Error generating video: {str(e)}")
         log_error(traceback.format_exc())

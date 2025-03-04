@@ -220,6 +220,43 @@ class VoiceDiversification:
             print(colored("✗ Failed to generate random voiceover", "red"))
             return None
 
+    def select_voice(self, channel_type, gender=None):
+        """Select a voice based on channel type and gender preference with consistent results"""
+        try:
+            # Determine gender preference based on content type if not specified
+            if gender is None:
+                if channel_type == 'tech_humor':
+                    gender = 'male'  # Use male voices for tech humor
+                elif channel_type == 'baby_tips':
+                    gender = 'female'  # Prefer female voices for baby tips
+                elif channel_type == 'fitness_motivation':
+                    gender = 'male'    # Prefer male voices for fitness motivation
+                elif channel_type == 'quick_meals':
+                    gender = 'female'  # Prefer female voices for cooking content
+                elif channel_type == 'ai_money':
+                    gender = 'male'    # Prefer male voices for finance content
+            
+            # Use a deterministic approach to select a voice based on channel type
+            # This ensures we get the same voice each time for a given channel type
+            if gender == 'male':
+                voices = self.male_voices
+            elif gender == 'female':
+                voices = self.female_voices
+            else:
+                voices = self.all_voices
+            
+            if not voices:
+                return "default"
+            
+            # Use a hash of the channel type to select a consistent voice
+            # This is deterministic - same channel type will always get the same voice
+            index = hash(channel_type) % len(voices)
+            return voices[index]
+            
+        except Exception as e:
+            print(f"Error selecting voice: {str(e)}")
+            return "default"
+
 async def test_voice_diversification():
     """Test the voice diversification system"""
     diversifier = VoiceDiversification()

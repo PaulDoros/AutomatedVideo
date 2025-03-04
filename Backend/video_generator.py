@@ -8,7 +8,7 @@ from content_validator import ContentValidator, ScriptGenerator
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips, AudioClip, CompositeAudioClip
 from moviepy.video.tools.subtitles import SubtitlesClip
 from tiktokvoice import tts
-from video import generate_video, generate_subtitles, combine_videos, save_video, generate_tts_audio
+from video import generate_video, generate_subtitles, combine_videos, save_video, generate_tts_audio, trim_audio_file
 from test_content_quality import ContentQualityChecker
 import json
 import time
@@ -100,31 +100,48 @@ class AudioManager:
         return list(voices.keys())[0], channel_config['style']
         
     def select_coqui_voice(self, channel_type, gender=None):
-        """Select a Coqui TTS voice based on content type"""
-        # Get appropriate emotion for the content type
-        emotions = self.content_emotions.get(channel_type, self.content_emotions['default'])
-        emotion = random.choice(emotions)
-        
-        # Check if the model supports multiple speakers
-        has_speaker_support = hasattr(self.voice_diversifier.api, 'speakers') and self.voice_diversifier.api.speakers
-        
-        if not has_speaker_support:
-            # If no speaker support, just return None for voice and the selected emotion
-            return None, emotion
-        
-        # Determine gender preference based on content type if not specified
-        if gender is None:
-            if channel_type == 'baby_tips':
-                gender = 'female'  # Prefer female voices for baby tips
-            elif channel_type == 'fitness_motivation':
-                gender = 'male'    # Prefer male voices for fitness motivation
-            # For other content types, leave gender as None for random selection
-        
-        # Get a random voice based on gender preference
-        voice = self.voice_diversifier.get_random_voice(gender)
-        
-        print(colored(f"Selected Coqui voice: {voice} (emotion: {emotion})", "blue"))
-        return voice, emotion
+        """Select a Coqui TTS voice based on channel type and gender preference"""
+        try:
+            # Define emotion mapping for different channel types
+            emotion_map = {
+                'tech_humor': 'friendly',
+                'ai_money': 'professional',
+                'baby_tips': 'warm',
+                'quick_meals': 'cheerful',
+                'fitness_motivation': 'energetic'
+            }
+            
+            # Get appropriate emotion for the channel
+            emotion = emotion_map.get(channel_type, 'neutral')
+            
+            # Check if we have a cached voice for this channel type
+            cache_key = f"{channel_type}_{gender if gender else 'any'}"
+            if hasattr(self, 'voice_cache') and cache_key in self.voice_cache:
+                voice, stored_emotion = self.voice_cache[cache_key]
+                print(colored(f"Using cached voice: {voice} (emotion: {stored_emotion})", "blue"))
+                return voice, stored_emotion
+            
+            # Initialize voice cache if it doesn't exist
+            if not hasattr(self, 'voice_cache'):
+                self.voice_cache = {}
+            
+            # Get available voices from the voice diversifier
+            if hasattr(self, 'voice_diversifier') and self.voice_diversifier:
+                # Select a voice based on channel type and gender preference
+                voice = self.voice_diversifier.select_voice(channel_type, gender)
+                
+                # Cache the selected voice for future use
+                self.voice_cache[cache_key] = (voice, emotion)
+                
+                print(colored(f"Selected Coqui voice: {voice} (emotion: {emotion})", "blue"))
+                return voice, emotion
+            else:
+                print(colored("Voice diversifier not initialized, using default voice", "yellow"))
+                return "default", emotion
+                
+        except Exception as e:
+            print(colored(f"Error selecting Coqui voice: {str(e)}", "red"))
+            return "default", "neutral"
 
     def enhance_audio(self, audio_segment):
         """Enhance audio quality"""
@@ -317,66 +334,151 @@ class VideoGenerator:
             
             if not script:
                 raise ValueError("Script is empty")
-
-            # Generate components
+                
+            # Create necessary directories
+            print(colored("✓ Directory structure created", "green"))
+            
+            # Generate TTS audio
             tts_path = await self._generate_tts(script, channel_type)
             if not tts_path:
                 raise ValueError("Failed to generate TTS audio")
             
-            # Get audio duration for timing calculations
+            # Trim the end of the audio to remove strange sounds (0.2 seconds from the end)
+            print(colored("Trimming 0.2 seconds from the end of audio to remove artifacts", "blue"))
+            original_audio = AudioFileClip(tts_path)
+            trimmed_audio = original_audio.subclip(0, original_audio.duration - 0.2)
+            
+            # Add 1-second silence at the beginning of the audio to match subtitle delay
+            print(colored("Adding 1-second silence at the beginning of audio to match subtitle delay", "blue"))
+            
+            # Create 1 second of silence with the same parameters as the original audio
+            silence_duration = 1.0
+            silence = AudioClip(lambda t: 0, duration=silence_duration)
+            
+            # Concatenate silence and original audio
+            delayed_audio = concatenate_audioclips([silence, trimmed_audio])
+            
+            # Save the delayed audio to a temporary file
+            delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
+            delayed_audio.write_audiofile(delayed_audio_path)
+            
+            # Close the audio clips to free resources
+            original_audio.close()
+            trimmed_audio.close()
+            delayed_audio.close()
+            
+            # Use the delayed audio for the rest of the process
+            tts_path = delayed_audio_path
+                
+            # Get audio duration for video length calculation
             audio_clip = AudioFileClip(tts_path)
             audio_duration = audio_clip.duration
             audio_clip.close()
             
-            # Calculate video duration with a small buffer at the end only
-            # We're removing the 1s intro delay and reducing the outro buffer
-            video_duration = audio_duration + 1.0  # Just 1s buffer at the end
-            print(colored(f"Original audio duration: {audio_duration:.2f}s", "cyan"))
-            print(colored(f"Video duration: {video_duration:.2f}s (with 1s buffer at end)", "cyan"))
+            print(colored(f"Original audio duration: {audio_duration:.2f}s", "blue"))
             
-            # Use the original audio file directly without padding or delay
-            # This avoids the strange sound at the end
+            # Calculate target duration with padding
+            start_padding = 1.0  # 1 second at start (already added to audio)
+            end_padding = 3.0    # 3 seconds at end (increased from 2 to 3 seconds)
+            target_duration = audio_duration + end_padding  # Start padding already included in audio
+            print(colored(f"Video duration: {target_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)", "blue"))
             
-            # Generate subtitles without delay
-            subtitles_text = script
-            subtitles_path = generate_subtitles(
-                script=script,
-                audio_path=tts_path,
-                content_type=channel_type
-            )
-            
+            # Generate subtitles with proper timing
+            subtitles_path = await self._generate_subtitles(script, tts_path, channel_type)
             if not subtitles_path:
                 raise ValueError("Failed to generate subtitles")
+                
+            # Process background videos
+            background_videos = await self._process_background_videos(channel_type, script)
             
-            # Get background videos with video duration
-            background_paths = await self._process_background_videos(channel_type, script)
-            if not background_paths:
-                raise ValueError("Failed to get background videos")
-            
-            # Ensure we have a list of background paths
-            if isinstance(background_paths, str):
-                background_paths = [background_paths]
-            
-            # Generate video with the calculated duration
-            output_path = generate_video(
-                background_paths,
-                tts_path,  # Use original audio file
-                subtitles_path,  # Use original subtitles without delay
-                channel_type,
-                target_duration=video_duration
+            # Generate video
+            from video import generate_video
+            video = generate_video(
+                background_path=background_videos,
+                audio_path=tts_path,
+                subtitles_path=subtitles_path,
+                content_type=channel_type,
+                target_duration=target_duration
             )
             
-            if not output_path:
-                raise ValueError("Failed to generate final video")
+            if not video:
+                raise ValueError("Failed to generate video")
+                
+            # Write final video with specific parameters to prevent black frames
+            temp_video_path = "temp/temp_video_no_audio.mp4"
+            temp_audio_path = "temp/temp_audio.mp3"
+            output_path = "temp_output.mp4"
             
-            # Save output
+            print(colored(f"\n=== 🎥 Rendering Final Video 🎥 ===", "blue"))
+            print(colored(f"ℹ️ Output path: {output_path}", "cyan"))
+            
+            # Show a message about rendering time
+            print(colored("⏳ Rendering final video... This may take a while", "cyan"))
+            start_time = time.time()
+            
+            # Step 1: Extract the audio - handle both simple AudioFileClip and CompositeAudioClip
+            if hasattr(video, 'audio') and video.audio is not None:
+                # Check if it's a CompositeAudioClip (which doesn't have fps)
+                if isinstance(video.audio, CompositeAudioClip):
+                    # Create a new audio file directly from the source
+                    source_audio = AudioFileClip(tts_path)
+                    source_audio.write_audiofile(temp_audio_path)
+                    source_audio.close()
+                else:
+                    # It's a regular AudioFileClip
+                    video.audio.write_audiofile(temp_audio_path)
+            else:
+                # If no audio in video, use the original TTS file
+                shutil.copy2(tts_path, temp_audio_path)
+            
+            # Step 2: Write the video without audio
+            video.without_audio().write_videofile(
+                temp_video_path,
+                codec='libx264',
+                fps=30,
+                preset='ultrafast',
+                ffmpeg_params=["-vf", "format=yuv420p"]
+            )
+            
+            # Step 3: Combine video and audio using ffmpeg directly
+            # IMPORTANT: Removed the -shortest flag to ensure the full video duration is preserved
+            import subprocess
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", temp_video_path,
+                "-i", temp_audio_path,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-map", "0:v:0",  # Use the entire video track
+                "-map", "1:a:0",  # Use the entire audio track
+                output_path
+            ]
+            subprocess.run(cmd, check=True)
+            
+            elapsed_time = time.time() - start_time
+            print(colored(f"⏱️ Video rendered in {elapsed_time:.1f} seconds", "cyan"))
+            
+            # Clean up
+            print(colored("ℹ️ Cleaning up resources...", "cyan"))
+            try:
+                video.close()
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+                if os.path.exists(temp_audio_path):
+                    os.remove(temp_audio_path)
+            except Exception as e:
+                print(colored(f"Warning: Error during cleanup: {str(e)}", "yellow"))
+            
+            # Create timestamped output path
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            final_path = f"output/videos/{channel_type}_{timestamp}.mp4"
-            latest_path = f"output/videos/{channel_type}_latest.mp4"
-            os.makedirs(os.path.dirname(final_path), exist_ok=True)
+            final_output_path = f"output/videos/{channel_type}_{timestamp}.mp4"
             
-            # Save both timestamped and latest version
-            shutil.copy2(output_path, final_path)
+            # Create latest output path
+            latest_path = f"output/videos/{channel_type}_latest.mp4"
+            
+            # Copy to output directory
+            os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
+            shutil.copy2(output_path, final_output_path)
             shutil.copy2(output_path, latest_path)
             
             print(colored("\n=== Video Generation Complete ===", "green"))
@@ -402,7 +504,10 @@ class VideoGenerator:
                 try:
                     # Select appropriate emotion for the content type
                     # (voice selection will be handled by the API based on whether the model supports speakers)
-                    _, emotion = self.audio_manager.select_coqui_voice(channel_type)
+                    voice, emotion = self.audio_manager.select_coqui_voice(channel_type)
+                    
+                    # Store the selected voice to ensure consistency
+                    print(colored(f"Selected voice: {voice} (emotion: {emotion})", "blue"))
                     
                     # Create unique filename based on channel type and emotion
                     filename = f"{channel_type}_{emotion}_{int(time.time())}.wav"
@@ -411,30 +516,103 @@ class VideoGenerator:
                     # Check if the model supports multiple speakers
                     has_speaker_support = hasattr(self.audio_manager.voice_diversifier.api, 'speakers') and self.audio_manager.voice_diversifier.api.speakers
                     
+                    # Set speed based on content type - faster for humorous content
+                    speed_multiplier = 1.0
+                    if channel_type == "tech_humor":
+                        speed_multiplier = 1.1  # Changed from 1.25 to 1.1 for better clarity while still being fast
+                        print(colored(f"Using speed multiplier of {speed_multiplier} for tech humor content", "blue"))
+                    elif emotion == "cheerful":
+                        speed_multiplier = 1.1  # Slightly faster for cheerful emotion
+                    
+                    # Confirm we're using XTTS v2
+                    print(colored("Confirming TTS model: Using XTTS v2 for high-quality voice generation", "blue"))
+                    
+                    # Split script into sentences for better TTS quality
+                    sentences = []
+                    for line in clean_script.split('\n'):
+                        # Split by common sentence terminators but preserve them
+                        parts = re.split(r'([.!?])', line)
+                        for i in range(0, len(parts)-1, 2):
+                            if parts[i].strip():
+                                sentence = parts[i] + (parts[i+1] if i+1 < len(parts) else '')
+                                sentences.append(sentence.strip())
+                    
+                    # If no sentences were found, use the whole script
+                    if not sentences:
+                        sentences = [clean_script]
+                    
+                    print(colored(f"Processing {len(sentences)} sentences for better TTS quality", "blue"))
+                    
                     if has_speaker_support:
-                        # Get a voice if the model supports it
-                        voice, _ = self.audio_manager.select_coqui_voice(channel_type)
-                        print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion})", "blue"))
+                        # Generate voice using the Coqui TTS API with speaker - process sentence by sentence
+                        print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed_multiplier})", "blue"))
                         
-                        # Generate voice using the Coqui TTS API with speaker
-                        result = await self.audio_manager.voice_diversifier.api.generate_voice(
-                            text=clean_script,
-                            speaker=voice,
-                            language="en",
-                            emotion=emotion,
-                            speed=1.1 if emotion == "cheerful" else 1.0,
-                            output_path=output_path
-                        )
+                        # Generate each sentence separately for better prosody
+                        sentence_audio_files = []
+                        for i, sentence in enumerate(sentences):
+                            if not sentence.strip():
+                                continue
+                                
+                            # Add breaks between sentences for natural pauses
+                            if i > 0:
+                                sentence = f"<break time='0.2s'/> {sentence}"
+                            
+                            # Generate temporary file for this sentence
+                            sentence_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
+                            
+                            # Generate voice for this sentence
+                            result = await self.audio_manager.voice_diversifier.api.generate_voice(
+                                text=sentence,
+                                speaker=voice,  # Use the same voice for all sentences
+                                language="en",
+                                emotion=emotion,
+                                speed=speed_multiplier,
+                                output_path=sentence_path
+                            )
+                            
+                            if result:
+                                sentence_audio_files.append(result)
+                        
+                        # Combine all sentence audio files
+                        if sentence_audio_files:
+                            # Use pydub to concatenate WAV files
+                            combined = AudioSegment.empty()
+                            for audio_file in sentence_audio_files:
+                                segment = AudioSegment.from_wav(audio_file)
+                                combined += segment
+                            
+                            # Save combined audio
+                            combined.export(output_path, format="wav")
+                            
+                            # Clean up temporary files
+                            for audio_file in sentence_audio_files:
+                                try:
+                                    os.remove(audio_file)
+                                except:
+                                    pass
+                            
+                            print(colored(f"✓ Generated voice file: {output_path}", "green"))
+                            result = output_path
+                        else:
+                            # Fallback to generating the whole script at once
+                            result = await self.audio_manager.voice_diversifier.api.generate_voice(
+                                text=clean_script,
+                                speaker=voice,
+                                language="en",
+                                emotion=emotion,
+                                speed=speed_multiplier,
+                                output_path=output_path
+                            )
                     else:
                         # Use default voice with emotion if the model doesn't support multiple speakers
-                        print(colored(f"Using Coqui TTS default voice (emotion: {emotion})", "blue"))
+                        print(colored(f"Using Coqui TTS default voice (emotion: {emotion}, speed: {speed_multiplier})", "blue"))
                         
                         # Generate voice using the Coqui TTS API without speaker
                         result = await self.audio_manager.voice_diversifier.api.generate_voice(
                             text=clean_script,
                             language="en",
                             emotion=emotion,
-                            speed=1.1 if emotion == "cheerful" else 1.0,
+                            speed=speed_multiplier,
                             output_path=output_path
                         )
                     
@@ -442,7 +620,7 @@ class VideoGenerator:
                         # Convert WAV to MP3 for compatibility with video generation
                         final_path = f"temp/tts/{channel_type}_latest.mp3"
                         
-                        # Use moviepy to convert WAV to MP3
+                        # Use moviepy to convert WAV to MP3 without any processing
                         audio_clip = AudioFileClip(result)
                         audio_clip.write_audiofile(final_path)
                         audio_clip.close()
@@ -450,69 +628,51 @@ class VideoGenerator:
                         print(colored(f"✓ Generated TTS audio with Coqui: {final_path}", "green"))
                         return final_path
                     else:
-                        raise Exception("Failed to generate voice with Coqui TTS")
-                except Exception as coqui_error:
-                    # Fallback to OpenAI TTS if Coqui fails
-                    print(colored(f"Coqui TTS failed: {str(coqui_error)}", "yellow"))
+                        raise ValueError("Failed to generate TTS with Coqui")
+                except Exception as e:
+                    print(colored(f"Coqui TTS failed: {str(e)}", "red"))
                     print(colored("Falling back to OpenAI TTS", "yellow"))
-                    return await self._generate_openai_tts(clean_script, channel_type)
-            else:
-                # Use OpenAI TTS
-                return await self._generate_openai_tts(clean_script, channel_type)
+            
+            # Fall back to OpenAI TTS
+            return await self._generate_openai_tts(clean_script, channel_type)
             
         except Exception as e:
-            print(colored(f"TTS generation failed: {str(e)}", "red"))
-            # Try fallback to OpenAI TTS
-            if self.use_coqui_tts:
-                print(colored("Falling back to OpenAI TTS", "yellow"))
-                try:
-                    return await self._generate_openai_tts(clean_script, channel_type)
-                except Exception as fallback_error:
-                    print(colored(f"Fallback TTS also failed: {str(fallback_error)}", "red"))
+            print(colored(f"TTS Generation failed: {str(e)}", "red"))
             return None
-            
+
     async def _generate_openai_tts(self, clean_script, channel_type):
         """Generate TTS using OpenAI's voice API"""
         try:
-            voice, style = self.audio_manager.select_voice(channel_type)
+            # Get appropriate voice for the channel
+            voice_config = self.get_voice_for_channel(channel_type)
+            voice = voice_config.get('voice', 'nova')
+            style = voice_config.get('style', 'neutral')
             
             print(colored(f"Using OpenAI voice: {voice} (style: {style})", "blue"))
             
-            # Make a single API call for the entire script
-            client = openai.OpenAI()
+            # Create client
+            client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            
+            # Create output path
+            os.makedirs("temp/tts", exist_ok=True)
+            output_path = f"temp/tts/{channel_type}_latest.mp3"
+            
+            # Generate speech
             response = client.audio.speech.create(
-                model="tts-1-hd",
+                model="tts-1",
                 voice=voice,
                 input=clean_script,
-                speed=1.1 if style == 'humorous' else 1.0,
-                response_format="mp3"
+                speed=1.2 if channel_type == "tech_humor" else 1.0  # Faster for tech humor
             )
             
-            # Save the audio file
-            temp_path = f"temp/tts/{channel_type}_raw.mp3"
-            final_path = f"temp/tts/{channel_type}_latest.mp3"
-            os.makedirs(os.path.dirname(final_path), exist_ok=True)
-            
-            with open(temp_path, "wb") as f:
-                response.stream_to_file(temp_path)
-            
-            # Trim 0.1 seconds from the end to remove strange sounds
-            audio_clip = AudioFileClip(temp_path)
-            trimmed_duration = max(0.1, audio_clip.duration - 0.1)  # Ensure we don't get negative duration
-            trimmed_audio = audio_clip.subclip(0, trimmed_duration)
-            trimmed_audio.write_audiofile(final_path)
-            
-            # Clean up
-            audio_clip.close()
-            trimmed_audio.close()
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            # Save to file
+            response.stream_to_file(output_path)
             
             print(colored(f"✓ Generated TTS audio with OpenAI and trimmed 0.1s from end", "green"))
-            return final_path
+            return output_path
             
         except Exception as e:
-            print(colored(f"OpenAI TTS generation failed: {str(e)}", "red"))
+            print(colored(f"OpenAI TTS failed: {str(e)}", "red"))
             return None
 
     async def _generate_subtitles(self, script: str, tts_path: str, channel_type: str) -> str:
