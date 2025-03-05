@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import os
 import time
 from typing import Tuple
+from datetime import datetime
 
 class ContentValidator:
     def __init__(self):
@@ -322,28 +323,76 @@ class ScriptGenerator:
             # Create directory if it doesn't exist
             os.makedirs("cache/scripts", exist_ok=True)
             
-            # Generate a preview
-            preview = script.split("\n")[0] if "\n" in script else script[:50] + "..."
+            # Define section headers to remove
+            section_headers = [
+                "**Hook:**", "**Problem/Setup:**", "**Solution/Development:**", 
+                "**Result/Punchline:**", "**Call to action:**", 
+                "Hook:", "Problem/Setup:", "Solution/Development:", 
+                "Result/Punchline:", "Call to action:",
+                "**Script:**", "Script:"
+            ]
             
-            # Save to JSON file
+            # Define patterns to filter out
+            special_patterns = ["---", "***", "**", "##"]
+            
+            # Process line by line
+            cleaned_lines = []
+            for line in script.split('\n'):
+                line_to_add = line
+                skip_line = False
+                
+                # Skip lines that only contain special characters
+                if line.strip() in special_patterns or line.strip("-*#") == "":
+                    skip_line = True
+                    continue
+                
+                # Remove numeric prefixes (like "1.")
+                if re.match(r'^\d+\.', line.strip()):
+                    line_to_add = re.sub(r'^\d+\.\s*', '', line.strip())
+                
+                for header in section_headers:
+                    if line.strip() == header or line.strip().startswith(header):
+                        # If the line is just a header, skip it entirely
+                        if line.strip() == header or line[line.find(header) + len(header):].strip() == "":
+                            skip_line = True
+                            break
+                        # Otherwise, remove the header and keep the content
+                        line_to_add = line[line.find(header) + len(header):].strip()
+                        break
+                
+                if not skip_line and line_to_add.strip():
+                    cleaned_lines.append(line_to_add)
+            
+            # Reassemble the script
+            cleaned_script = '\n'.join(cleaned_lines)
+            
+            # Save a plain text version for TTS
+            with open(f"cache/scripts/{channel_type}_latest.txt", "w", encoding="utf-8") as f:
+                f.write(cleaned_script)
+            
+            # Generate a preview of the script (first 100 characters)
+            preview = cleaned_script[:100] + "..." if len(cleaned_script) > 100 else cleaned_script
+            
+            # Save the script data to a JSON file
             script_data = {
-                "script": script,
+                "script": script,  # Original script for reference
+                "cleaned_script": cleaned_script,  # Cleaned script for TTS and subtitles
                 "thumbnail_title": thumbnail_title,
                 "preview": preview,
                 "is_valid": is_valid,
-                "metrics": {
-                    "estimated_duration": analysis.get("estimated_duration", 0),
-                    "word_count": len(script.split())
-                }
+                "metrics": analysis.get("metrics", {}),
+                "timestamp": datetime.now().isoformat()
             }
             
-            with open(f"cache/scripts/{channel_type}_latest.json", "w") as f:
+            with open(f"cache/scripts/{channel_type}_latest.json", "w", encoding="utf-8") as f:
                 json.dump(script_data, f, indent=2)
-                
-            print(colored(f"✓ Script saved to cache/scripts/{channel_type}_latest.json", "green"))
             
+            print(colored(f"✓ Script saved to cache/scripts/{channel_type}_latest.json", "green"))
+            return True
+
         except Exception as e:
             print(colored(f"Error saving script: {str(e)}", "red"))
+            return False
 
     def track_usage(self, script, is_premium):
         """Track token usage and estimated costs"""
@@ -608,12 +657,15 @@ Choose a trending, engaging topic for this channel. Focus on ONE clear message o
 
         # Add example structure
         prompt += """
-STRUCTURE EXAMPLE:
-1. Hook: Attention-grabbing opening (10-15 words)
-2. Problem/Setup: Identify the situation (10-20 words)
-3. Solution/Development: Present key information (20-50 words)
-4. Result/Punchline: Deliver the main point (10-20 words)
-5. Call to action: Engage viewers (5-10 words)
+STRUCTURE EXAMPLE (DO NOT include these labels in your actual script):
+- Start with an attention-grabbing opening (10-15 words)
+- Identify the situation or problem (10-20 words)
+- Present key information or solution (20-50 words)
+- Deliver the main point or punchline (10-20 words)
+- End with a brief call to action (5-10 words)
+
+IMPORTANT: DO NOT include section labels like "Hook:", "Problem/Setup:", etc. in your script. 
+Write the script as a flowing, natural piece of content without any section headers or markers.
 """
 
         return prompt

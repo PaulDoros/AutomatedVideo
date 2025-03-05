@@ -5,6 +5,7 @@ import aiohttp
 import asyncio
 from pathlib import Path
 from termcolor import colored
+from content_learning_system import ContentLearningSystem
 
 class JokeProvider:
     """Provides pre-written jokes for tech_humor channel"""
@@ -15,6 +16,13 @@ class JokeProvider:
         self.used_jokes_file = Path(os.path.dirname(os.path.abspath(__file__))) / "resources" / "jokes" / "used_jokes.json"
         self.used_jokes = self._load_used_jokes()
         self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+        
+        # Initialize content learning system
+        self.learning_system = ContentLearningSystem()
+        
+        # Track joke performance
+        self.joke_performance_file = Path(os.path.dirname(os.path.abspath(__file__))) / "resources" / "jokes" / "joke_performance.json"
+        self.joke_performance = self._load_joke_performance()
         
     def _load_jokes(self):
         """Load jokes from the jokes file"""
@@ -42,6 +50,18 @@ class JokeProvider:
             print(f"Warning: Could not parse used jokes file at {self.used_jokes_file}")
             return []
     
+    def _load_joke_performance(self):
+        """Load joke performance data"""
+        if not self.joke_performance_file.exists():
+            return {}
+            
+        try:
+            with open(self.joke_performance_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Warning: Could not parse joke performance file at {self.joke_performance_file}")
+            return {}
+    
     def _save_used_joke(self, joke):
         """Save a record that a joke has been used"""
         if joke not in self.used_jokes:
@@ -52,6 +72,49 @@ class JokeProvider:
             
             with open(self.used_jokes_file, 'w', encoding='utf-8') as f:
                 json.dump(self.used_jokes, f, indent=2)
+    
+    def _save_joke_performance(self):
+        """Save joke performance data"""
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(self.joke_performance_file), exist_ok=True)
+        
+        with open(self.joke_performance_file, 'w', encoding='utf-8') as f:
+            json.dump(self.joke_performance, f, indent=2)
+    
+    def update_joke_performance(self, joke, metrics):
+        """Update performance metrics for a joke"""
+        # Create a hash of the joke for consistent identification
+        import hashlib
+        joke_hash = hashlib.md5(joke.encode()).hexdigest()
+        
+        # Update or create performance record
+        if joke_hash in self.joke_performance:
+            self.joke_performance[joke_hash]['metrics'] = metrics
+            self.joke_performance[joke_hash]['updated_at'] = asyncio.get_event_loop().time()
+        else:
+            self.joke_performance[joke_hash] = {
+                'joke': joke,
+                'metrics': metrics,
+                'created_at': asyncio.get_event_loop().time(),
+                'updated_at': asyncio.get_event_loop().time()
+            }
+        
+        # Save performance data
+        self._save_joke_performance()
+        
+        # Record in learning system
+        if 'video_id' in metrics:
+            self.learning_system.record_content_performance(
+                metrics['video_id'],
+                'tech_humor',
+                joke,
+                {
+                    'views': metrics.get('views', 0),
+                    'likes': metrics.get('likes', 0),
+                    'comments': metrics.get('comments', 0),
+                    'ctr': metrics.get('ctr', 0.0)
+                }
+            )
         
     def get_random_joke(self):
         """Get a random joke from the collection"""
@@ -69,6 +132,27 @@ class JokeProvider:
             
         # Get a random joke
         joke = random.choice(available_jokes)
+        
+        # Check if joke is blacklisted
+        is_blacklisted, reason = self.learning_system.is_content_blacklisted('tech_humor', joke)
+        if is_blacklisted:
+            print(colored(f"Joke is blacklisted: {reason}. Selecting another joke.", "yellow"))
+            # Remove from available jokes and try again
+            available_jokes.remove(joke)
+            if not available_jokes:
+                return "Why did the programmer quit his job? He didn't get arrays! 😂\nFollow for more tech humor! 🚀"
+            joke = random.choice(available_jokes)
+        
+        # Check if joke is too similar to recent content
+        is_repetitive, details = self.learning_system.is_content_repetitive('tech_humor', joke)
+        if is_repetitive:
+            print(colored(f"Joke is too similar to recent content: {details['message']}. Selecting another joke.", "yellow"))
+            # Remove from available jokes and try again
+            available_jokes.remove(joke)
+            if not available_jokes:
+                return "Why did the programmer quit his job? He didn't get arrays! 😂\nFollow for more tech humor! 🚀"
+            joke = random.choice(available_jokes)
+        
         self._save_used_joke(joke)
         return joke
         
@@ -90,15 +174,22 @@ class JokeProvider:
         if topic:
             topic_lower = topic.lower()
             matching_jokes = [joke for joke in available_jokes if topic_lower in joke.lower()]
-            if matching_jokes:
-                joke = random.choice(matching_jokes)
+            
+            # Filter out blacklisted jokes
+            filtered_matching_jokes = []
+            for joke in matching_jokes:
+                is_blacklisted, _ = self.learning_system.is_content_blacklisted('tech_humor', joke)
+                is_repetitive, _ = self.learning_system.is_content_repetitive('tech_humor', joke)
+                if not is_blacklisted and not is_repetitive:
+                    filtered_matching_jokes.append(joke)
+            
+            if filtered_matching_jokes:
+                joke = random.choice(filtered_matching_jokes)
                 self._save_used_joke(joke)
                 return joke
                 
         # If no topic or no matching jokes, return a random one
-        joke = random.choice(available_jokes)
-        self._save_used_joke(joke)
-        return joke
+        return self.get_random_joke()
     
     async def generate_joke_with_deepseek(self, topic=None):
         """Generate a new joke using DeepSeek API"""
@@ -108,8 +199,21 @@ class JokeProvider:
             
         print(colored("Generating new joke with DeepSeek API...", "blue"))
         
+        # Get content suggestions from learning system
+        suggestions = self.learning_system.get_content_suggestions('tech_humor', topic)
+        
+        # Extract high-performing keywords
+        high_performing_keywords = []
+        for suggestion in suggestions:
+            if suggestion['type'] == 'keywords':
+                high_performing_keywords.extend(suggestion.get('data', [])[:5])
+        
         # Prepare the prompt
         topic_text = f" about {topic}" if topic else ""
+        keyword_text = ""
+        if high_performing_keywords:
+            keyword_text = f"\n6. Consider using some of these high-performing keywords if relevant: {', '.join(high_performing_keywords)}"
+            
         prompt = f"""You are a professional comedy writer for tech humor. 
 Create a short, witty tech joke{topic_text} for a YouTube Short.
 The joke should be:
@@ -117,7 +221,7 @@ The joke should be:
 2. Related to programming, technology, or developer culture
 3. Short (3-5 lines maximum)
 4. Include emojis for visual appeal
-5. End with "Follow for more tech humor! 🚀"
+5. End with "Follow for more tech humor! 🚀"{keyword_text}
 
 Format the joke with each sentence on a new line.
 DO NOT include any explanations, just the joke itself.
@@ -147,6 +251,19 @@ DO NOT include any explanations, just the joke itself.
                     if response.status == 200:
                         result = await response.json()
                         joke = result["choices"][0]["message"]["content"].strip()
+                        
+                        # Check if joke is blacklisted
+                        is_blacklisted, reason = self.learning_system.is_content_blacklisted('tech_humor', joke)
+                        if is_blacklisted:
+                            print(colored(f"Generated joke is blacklisted: {reason}. Using pre-written joke instead.", "yellow"))
+                            return self.get_random_joke()
+                        
+                        # Check if joke is too similar to recent content
+                        is_repetitive, details = self.learning_system.is_content_repetitive('tech_humor', joke)
+                        if is_repetitive:
+                            print(colored(f"Generated joke is too similar to recent content: {details['message']}. Using pre-written joke instead.", "yellow"))
+                            return self.get_random_joke()
+                        
                         print(colored("Successfully generated joke with DeepSeek API", "green"))
                         return joke
                     else:

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 import random
 import nltk
 from joke_provider import JokeProvider
+from content_learning_system import ContentLearningSystem
 
 # Download wordnet if not already downloaded
 nltk.download('wordnet')
@@ -29,136 +30,172 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
     thumb_gen = ThumbnailGenerator()
     content_monitor = ContentMonitor()
     content_validator = ContentValidator()
+    learning_system = ContentLearningSystem()
     
     # Set music volume for better audibility
     video_gen.music_volume = music_volume
     print(colored(f"Setting music volume to: {video_gen.music_volume} for better audibility", "cyan"))
     
-    # Check if topic is a duplicate
-    if topic and content_monitor.is_topic_duplicate(channel_type, topic):
-        print(colored(f"✗ Topic '{topic}' is a duplicate for {channel_type}", "yellow"))
+    # Check if topic is a duplicate using both systems
+    is_duplicate = False
+    if topic:
+        # Check with content monitor
+        if content_monitor.is_topic_duplicate(channel_type, topic):
+            print(colored(f"✗ Topic '{topic}' is a duplicate for {channel_type}", "yellow"))
+            is_duplicate = True
         
-        # Suggest alternative topic
-        suggestion = content_monitor.suggest_alternative_topic(channel_type, topic)
+        # Check with learning system
+        is_repetitive, details = learning_system.is_content_repetitive(channel_type, topic)
+        if is_repetitive:
+            print(colored(f"✗ Topic '{topic}' is too similar to recent content: {details['message']}", "yellow"))
+            is_duplicate = True
         
-        if suggestion:
-            print(colored(f"Suggestion: {suggestion}", "cyan"))
+        # Check if blacklisted
+        is_blacklisted, reason = learning_system.is_content_blacklisted(channel_type, topic)
+        if is_blacklisted:
+            print(colored(f"✗ Topic '{topic}' is blacklisted: {reason}", "yellow"))
+            is_duplicate = True
+        
+        if is_duplicate:
+            # Suggest alternative topic
+            suggestion = content_monitor.suggest_alternative_topic(channel_type, topic)
             
-            # Extract alternative topic from suggestion
-            alt_topic = suggestion.split("Try '")[1].split("'")[0]
-            topic = alt_topic
-            
-            print(colored(f"Using alternative topic: {topic}", "green"))
-    
-    try:
-        # For tech_humor channel, use pre-written jokes or DeepSeek API
-        if channel_type == "tech_humor":
-            print(colored("\nUsing JokeProvider for tech_humor channel...", "blue"))
-            joke_provider = JokeProvider()
-            
-            # Check if we should use AI-generated jokes
-            # If we've used all pre-written jokes or explicitly requested AI
-            use_ai = False
-            if os.getenv("USE_AI_JOKES", "false").lower() == "true":
-                use_ai = True
-                print(colored("Using AI-generated jokes as requested in environment variables", "cyan"))
-            
-            # Get a joke (either pre-written or AI-generated)
-            script = await joke_provider.get_joke(topic, use_ai)
-            
-            # Validate the joke script
-            is_valid, analysis = content_validator.validate_script(script, channel_type)
-            if not is_valid:
-                print(colored(f"✗ Joke validation failed: {analysis.get('message', 'Unknown error')}", "yellow"))
-                # Try another joke if the first one fails validation
-                script = await joke_provider.get_joke(topic, True)  # Force AI generation for second attempt
-                is_valid, analysis = content_validator.validate_script(script, channel_type)
-                if not is_valid:
-                    print(colored(f"✗ Alternative joke validation failed: {analysis.get('message', 'Unknown error')}", "red"))
-                    return None
-            
-            # Save the script to a file for the video generator
-            script_file = f"cache/scripts/{channel_type}_latest.json"
-            os.makedirs(os.path.dirname(script_file), exist_ok=True)
-            
-            # Create a title from the first line of the joke
-            title = script.split('\n')[0]
-            
-            # Save script data
-            script_data = {
-                "script": script,
-                "title": title,
-                "channel_type": channel_type,
-                "topic": topic or "tech humor",
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            with open(script_file, 'w', encoding='utf-8') as f:
-                json.dump(script_data, f, indent=2)
+            if suggestion:
+                print(colored(f"Suggestion: {suggestion}", "cyan"))
                 
-            print(colored("✓ Joke selected and saved", "green"))
-            success = True
-        else:
-            # For other channels, generate script as usual
-            print(colored("\nGenerating script...", "blue"))
-            success, script = await script_gen.generate_script(
-                topic=topic,
-                channel_type=channel_type
-            )
+                # Extract alternative topic from suggestion
+                alt_topic = suggestion.split("Try '")[1].split("'")[0]
+                topic = alt_topic
+                
+                # Get content suggestions from learning system
+                content_suggestions = learning_system.get_content_suggestions(channel_type, topic)
+                if content_suggestions:
+                    print(colored("Additional suggestions from learning system:", "cyan"))
+                    for i, suggestion in enumerate(content_suggestions[:3], 1):
+                        print(colored(f"  {i}. {suggestion['message']}", "cyan"))
             
-        if not success:
-            print(colored(f"✗ Script generation failed for {channel_type}", "red"))
+    # For tech_humor channel, use JokeProvider
+    if channel_type == 'tech_humor':
+        print(colored(f"Using JokeProvider for {channel_type} channel...", "cyan"))
+        joke_provider = JokeProvider()
+        
+        # Get a joke
+        joke = await joke_provider.get_joke(topic, use_ai=True)
+        
+        # Save joke to file for reference
+        os.makedirs("cache/scripts", exist_ok=True)
+        with open(f"cache/scripts/{channel_type}_latest.txt", "w", encoding="utf-8") as f:
+            f.write(joke)
+        
+        print(colored("✓ Joke selected and saved", "green"))
+        
+        # Validate joke
+        is_valid, analysis = content_validator.validate_script(joke, channel_type)
+        
+        if not is_valid:
+            print(colored(f"✗ Joke validation failed: {analysis['message']}", "red"))
             return None
+        
         print(colored("✓ Script generated", "green"))
         
-        # Check if script content is a duplicate
-        if content_monitor.is_content_duplicate(channel_type, script):
-            print(colored(f"✗ Generated script is too similar to existing content", "yellow"))
-            return None
-        
-        # 2. Generate Video
+        # Generate video
         print(colored("\nGenerating video...", "blue"))
-        script_file = f"cache/scripts/{channel_type}_latest.json"
+        video_path = await video_gen.generate_video(channel_type, f"cache/scripts/{channel_type}_latest.txt")
         
-        # Create channel-specific output directory
-        channel_output_dir = f"output/videos/{channel_type}"
-        os.makedirs(channel_output_dir, exist_ok=True)
-        
-        # Generate timestamp for unique filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"{channel_type}_{timestamp}.mp4"
-        output_path = os.path.join(channel_output_dir, output_filename)
-        
-        success = await video_gen.create_video(
-            script_file=script_file,
-            channel_type=channel_type,
-            output_path=output_path
-        )
-        if not success:
-            print(colored(f"✗ Video generation failed for {channel_type}", "red"))
+        if not video_path:
+            print(colored("✗ Video generation failed", "red"))
             return None
-        print(colored("✓ Video generated", "green"))
-        print(colored(f"✓ Video saved to: {output_path}", "cyan"))
         
-        # 3. Generate Thumbnail
+        print(colored("✓ Video generated", "green"))
+        
+        # Generate thumbnail
         print(colored("\nGenerating thumbnail...", "blue"))
-        thumb_gen.generate_test_thumbnails()
+        thumbnail_path = thumb_gen.generate_thumbnail(channel_type, joke)
+        
+        if not thumbnail_path:
+            print(colored("✗ Thumbnail generation failed", "red"))
+            return None
+        
         print(colored("✓ Thumbnail generated", "green"))
         
         # Return video details
-        video_details = {
+        return {
             'channel_type': channel_type,
-            'topic': topic,
-            'script': script,
-            'file_path': output_path,
-            'thumbnail_path': f"test_thumbnails/{channel_type}.jpg"
+            'video_path': video_path,
+            'thumbnail_path': thumbnail_path,
+            'title': f"Tech Humor: {joke.splitlines()[0][:50]}",
+            'description': joke + "\n\n#tech #programming #humor #shorts",
+            'tags': ['tech', 'programming', 'humor', 'shorts', 'coding', 'developer', 'software'],
+            'script': joke
         }
+    
+    # For other channels, generate script with GPT
+    else:
+        # Get content suggestions from learning system
+        content_suggestions = learning_system.get_content_suggestions(channel_type, topic)
+        if content_suggestions:
+            print(colored("Content suggestions from learning system:", "cyan"))
+            for i, suggestion in enumerate(content_suggestions[:3], 1):
+                print(colored(f"  {i}. {suggestion['message']}", "cyan"))
         
-        return video_details
+        # Generate script
+        is_valid, script = await script_gen.generate_script(topic, channel_type)
         
-    except Exception as e:
-        print(colored(f"✗ Error generating content for {channel_type}: {str(e)}", "red"))
-        return None
+        if not is_valid or not script:
+            print(colored("✗ Script generation failed", "red"))
+            
+            # Check if script is repetitive or blacklisted
+            if script:
+                is_repetitive, details = learning_system.is_content_repetitive(channel_type, script)
+                if is_repetitive:
+                    print(colored(f"✗ Generated script is too similar to recent content: {details['message']}", "yellow"))
+                
+                is_blacklisted, reason = learning_system.is_content_blacklisted(channel_type, script)
+                if is_blacklisted:
+                    print(colored(f"✗ Generated script is blacklisted: {reason}", "yellow"))
+            
+            return None
+        
+        # Save script to file for reference
+        os.makedirs("cache/scripts", exist_ok=True)
+        with open(f"cache/scripts/{channel_type}_latest.txt", "w", encoding="utf-8") as f:
+            f.write(script)
+        
+        print(colored("✓ Script generated and saved", "green"))
+        
+        # Generate video
+        print(colored("\nGenerating video...", "blue"))
+        video_path = await video_gen.generate_video(channel_type, f"cache/scripts/{channel_type}_latest.txt")
+        
+        if not video_path:
+            print(colored("✗ Video generation failed", "red"))
+            return None
+        
+        print(colored("✓ Video generated", "green"))
+        
+        # Generate thumbnail
+        print(colored("\nGenerating thumbnail...", "blue"))
+        thumbnail_path = thumb_gen.generate_thumbnail(channel_type, script)
+        
+        if not thumbnail_path:
+            print(colored("✗ Thumbnail generation failed", "red"))
+            return None
+        
+        print(colored("✓ Thumbnail generated", "green"))
+        
+        # Extract title from script (first line)
+        title = script.split('\n')[0]
+        
+        # Return video details
+        return {
+            'channel_type': channel_type,
+            'video_path': video_path,
+            'thumbnail_path': thumbnail_path,
+            'title': title,
+            'description': script + "\n\n#shorts",
+            'tags': ['shorts'],
+            'script': script
+        }
 
 async def upload_content(video_details, schedule_id=None):
     """Upload content to YouTube"""
@@ -166,7 +203,7 @@ async def upload_content(video_details, schedule_id=None):
         return False, "No video details provided"
     
     channel_type = video_details['channel_type']
-    file_path = video_details['file_path']
+    file_path = video_details['video_path']
     topic = video_details['topic']
     
     print(colored(f"\n=== Uploading content for {channel_type} ===", "blue"))
@@ -178,12 +215,12 @@ async def upload_content(video_details, schedule_id=None):
     try:
         # Get thumbnail title from cache if available
         thumbnail_title = ""
-        cache_file = f"cache/scripts/{channel_type}_latest.json"
+        cache_file = f"cache/scripts/{channel_type}_latest.txt"
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'r') as f:
-                    cached = json.load(f)
-                    thumbnail_title = cached.get('thumbnail_title', '')
+                    cached = f.read()
+                    thumbnail_title = cached.split('\n')[0]
                     if thumbnail_title:
                         print(colored(f"Using thumbnail title as video title: {thumbnail_title}", "cyan"))
             except Exception as e:
@@ -198,8 +235,8 @@ async def upload_content(video_details, schedule_id=None):
             channel_type=channel_type,
             video_path=file_path,
             title=video_title,
-            description=None,  # Will use professional description in uploader
-            tags=[channel_type, 'shorts', 'youtube', 'content']
+            description=video_details['description'],
+            tags=video_details['tags']
         )
         
         if success:
@@ -302,8 +339,14 @@ async def analyze_performance():
     # Initialize analyzer
     analyzer = PerformanceAnalyzer()
     
+    # Initialize learning system
+    learning_system = ContentLearningSystem()
+    
     # Analyze all channels
     report_files = await analyzer.analyze_all_channels(days=30)
+    
+    # Update learning system with performance data
+    await learning_system.update_all_performance_data()
     
     if report_files:
         print(colored("\nGenerated performance reports:", "green"))
@@ -311,6 +354,12 @@ async def analyze_performance():
             print(colored(f"- {report_file}", "cyan"))
     else:
         print(colored("\nNo performance reports generated", "yellow"))
+    
+    # Calculate content diversity scores
+    print(colored("\nContent diversity analysis:", "blue"))
+    for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
+        diversity_score = learning_system.get_content_diversity_score(channel)
+        print(colored(f"- {channel}: {diversity_score:.2f}/1.0", "cyan"))
     
     print(colored("\n=== Performance analysis complete ===", "green"))
     return report_files
@@ -322,8 +371,22 @@ async def monitor_content():
     # Initialize monitor
     monitor = ContentMonitor()
     
+    # Initialize learning system
+    learning_system = ContentLearningSystem()
+    
     # Store all channel videos
     await monitor.store_all_channel_videos()
+    
+    # Analyze channel content with learning system
+    print(colored("\nAnalyzing content patterns:", "blue"))
+    for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
+        analysis = learning_system.analyze_channel_content(channel)
+        if analysis['status'] == 'success':
+            print(colored(f"\n{channel} content analysis:", "cyan"))
+            print(colored(f"- Video count: {analysis['video_count']}", "cyan"))
+            print(colored(f"- Average views: {analysis['avg_metrics']['views']:.0f}", "cyan"))
+            print(colored(f"- Content clusters: {len(analysis['content_clusters'])}", "cyan"))
+            print(colored(f"- Top keywords: {', '.join([kw for kw, _ in analysis['top_keywords'][:5]])}", "cyan"))
     
     print(colored("\n=== Content monitoring complete ===", "green"))
 
@@ -348,6 +411,9 @@ async def generate_and_upload(music_volume=0.3, no_upload=False):
     os.makedirs("test_thumbnails", exist_ok=True)
     os.makedirs("cache/scripts", exist_ok=True)
     
+    # Initialize learning system
+    learning_system = ContentLearningSystem()
+    
     # Channel topics
     topics = {
         'tech_humor': 'When Your Code Works But You Don\'t Know Why',
@@ -356,6 +422,17 @@ async def generate_and_upload(music_volume=0.3, no_upload=False):
         'quick_meals': '5-Minute Healthy Breakfast Ideas',
         'fitness_motivation': '10-Minute Morning Workout Routine'
     }
+    
+    # Get content suggestions for each channel
+    for channel in topics.keys():
+        suggestions = learning_system.get_content_suggestions(channel)
+        if suggestions:
+            # Find a high-performing suggestion
+            for suggestion in suggestions:
+                if suggestion['type'] == 'content' and suggestion.get('score', 0) > 0.7:
+                    print(colored(f"Using high-performing topic for {channel} based on learning system", "cyan"))
+                    topics[channel] = suggestion['title']
+                    break
     
     for channel, topic in topics.items():
         print(colored(f"\n=== Processing {channel}: {topic} ===", "blue"))
@@ -368,7 +445,31 @@ async def generate_and_upload(music_volume=0.3, no_upload=False):
         
         # Upload content if not disabled
         if not no_upload:
-            await upload_content(video_details)
+            upload_result = await upload_content(video_details)
+            
+            # Record performance data if upload was successful
+            if upload_result and 'video_id' in upload_result:
+                # Initialize with zero metrics
+                initial_metrics = {
+                    'video_id': upload_result['video_id'],
+                    'views': 0,
+                    'likes': 0,
+                    'comments': 0,
+                    'ctr': 0.0
+                }
+                
+                # Record in learning system
+                learning_system.record_content_performance(
+                    upload_result['video_id'],
+                    channel,
+                    video_details['script'],
+                    initial_metrics
+                )
+                
+                # For tech_humor, update joke performance
+                if channel == 'tech_humor':
+                    joke_provider = JokeProvider()
+                    joke_provider.update_joke_performance(video_details['script'], initial_metrics)
         else:
             print(colored("Skipping upload as requested with --no-upload", "yellow"))
         
@@ -400,54 +501,49 @@ def parse_args():
     
     return parser.parse_args()
 
-def main():
+async def main():
+    """Main function"""
     args = parse_args()
     
-    # Initialize database
-    db = VideoDatabase()
+    # Initialize learning system
+    learning_system = ContentLearningSystem()
     
-    # Initialize YouTube uploader
-    uploader = YouTubeUploader()
-    
-    # Initialize sessions for all channels
-    CHANNELS = ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
-    
+    # Process command line arguments
     if args.generate:
-        # Generate content for a specific channel or all channels
         if args.channel:
-            asyncio.run(generate_content(args.channel, args.topic, args.music_volume, args.no_upload))
+            # Generate for specific channel
+            await generate_content(args.channel, args.topic, args.music_volume, args.no_upload)
         else:
-            asyncio.run(generate_and_upload(args.music_volume, args.no_upload))
-    
+            # Generate for all channels
+            await generate_and_upload(args.music_volume, args.no_upload)
     elif args.schedule:
-        # Generate posting schedule for the next N days
-        scheduler = VideoScheduler(db)
-        scheduler.generate_schedule(args.schedule)
-        
+        # Generate posting schedule
+        await generate_schedule(args.schedule)
     elif args.process:
-        # Process scheduled uploads for the next N hours
-        asyncio.run(process_scheduled_uploads(args.process))
-        
+        # Process scheduled uploads
+        await process_scheduled_uploads(args.process)
     elif args.analyze:
-        # Analyze performance of all channels
-        analyzer = PerformanceAnalyzer(db)
-        analyzer.analyze_all_channels()
-        
+        # Analyze performance
+        await analyze_performance()
     elif args.monitor:
-        # Monitor content across all channels
-        monitor = ContentMonitor(db)
-        monitor.check_all_channels()
-        
+        # Monitor content
+        await monitor_content()
     elif args.cleanup:
         # Clean up video library
         print(colored(f"Cleaning up video library (max {args.max_videos} videos per channel, keeping videos newer than {args.days_to_keep} days)", "blue"))
         video_gen = VideoGenerator()
-        for channel in CHANNELS:
+        for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
             video_gen.cleanup_video_library(channel, max_videos=args.max_videos, days_to_keep=args.days_to_keep)
         print(colored("Video library cleanup complete", "green"))
-        
     else:
-        print("No action specified. Use --generate, --schedule, --process, --analyze, --monitor, or --cleanup")
+        # Show help
+        print("No action specified. Use --help to see available options.")
+        
+    # Print content diversity scores
+    print(colored("\nContent diversity scores:", "blue"))
+    for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
+        diversity_score = learning_system.get_content_diversity_score(channel)
+        print(colored(f"- {channel}: {diversity_score:.2f}/1.0", "cyan"))
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 

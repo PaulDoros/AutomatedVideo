@@ -1,59 +1,5 @@
 [
   {
-    "script": "Ever notice how talking to AI assistants is like playing a twisted game of Telephone? You ask for the weather, and suddenly, you're getting recipes for lasagna. It's like, \"Hey Siri, am I gonna need an umbrella today?\" and Siri's like, \"Here's a playlist called 'Songs to Cry to'.\" Makes me think, maybe AI stands for \"Absolutely Inept.\" And don't even get me started on autocorrect. It's like my phone's trying to sabotage my love life on purpose!",
-    "metrics": {
-      "duration": 34.0,
-      "words": 85,
-      "lines": 1
-    },
-    "timestamp": 1741085994.8534114
-  },
-  {
-    "script": "Ever tried explaining cloud computing to someone outside tech? It's like, \"Imagine storing your stuff in someone else\u2019s house but you pay rent for it.\" They nod, looking enlightened.\n\nThen they ask, \"So, can I visit my data on weekends?\" \n\nAnd you're like, \"No, Karen, your selfies aren't on a cloud road trip. They\u2019re just chilling on a server farm, probably gossiping about your passwords.\"\n\nIt's moments like these I wish data had visiting hours. And maybe, just maybe, a loyalty program for frequent visitors.\n\n---",
-    "metrics": {
-      "duration": 36.4,
-      "words": 91,
-      "lines": 5
-    },
-    "timestamp": 1741086001.0188296
-  },
-  {
-    "script": "Ever notice how your computer acts like it's in a bad relationship with updates? It's like, \"Oh, you have an important meeting in five minutes? Let me just throw in a quick update for ya.\" And there you are, staring at the screen, whispering sweet nothings, hoping it hurries up. But no, it decides now's the perfect time to reflect on every choice it's ever made, installing update 1 of 237. I guess in tech, \"It's not you, it's me\" translates to, \"Please restart your computer for the changes to take effect.\"",
-    "metrics": {
-      "duration": 39.2,
-      "words": 98,
-      "lines": 1
-    },
-    "timestamp": 1741086046.1277769
-  },
-  {
-    "script": "Ever notice how using your voice assistant feels like trying to order a sandwich at a noisy bar? You're shouting, \"Hey, turn on the lights!\" But it's like, \"Playing 'Fight Nights'.\"\n\nAnd you're there, thinking, \"Close enough,\" in a room lit only by the glow of your dwindling patience.\n\nThen, it gets philosophical, asking, \"Did you mean 'the inner light'?\" Suddenly, you're in a deep chat about life with a gadget that can't even find the switch.\n\nSo, you just give up and clap on the lights old school. Clap on, sanity off.\n\n---",
-    "metrics": {
-      "duration": 39.2,
-      "words": 98,
-      "lines": 5
-    },
-    "timestamp": 1741086068.728494
-  },
-  {
-    "script": "Ever notice how software updates are like gym memberships? You get the notification and think, \"Yeah, it's time to improve!\" \n\nSo, you agree, but then it says, \"This will take some time.\" Suddenly, your device is more committed to change than you are.\n\nYou come back, and it's like, \"Please restart to complete updates.\" That's the tech version of \"Please leave the gym and re-enter for the magic to happen.\"\n\nAnd just when you thought it\u2019s done, \"Installing update 1 of 97\"... Ah, the eternal cycle of hope and despair.\n\n---",
-    "metrics": {
-      "duration": 38.0,
-      "words": 95,
-      "lines": 5
-    },
-    "timestamp": 1741086126.1009645
-  },
-  {
-    "script": "Ever notice how software updates are like gym memberships? You ignore them for months, promising \"I'll start next week.\" Suddenly, your computer's slower than me after Thanksgiving dinner, groaning under the weight of pending updates. You hit \"remind me tomorrow,\" because who starts a diet on a Wednesday, right? Then one day, it forces an update, and you're watching that progress bar like it's the last slice of pizza at a party. And just like gym results, it promises speed and efficiency, but all you notice is a new icon you didn't want.",
-    "metrics": {
-      "duration": 39.2,
-      "words": 98,
-      "lines": 1
-    },
-    "timestamp": 1741086139.7714736
-  },
-  {
     "script": "Ever notice how updating software is like a box of chocolates? \ud83c\udf6b\ud83d\udcbb You never know what you're gonna get. \ud83d\ude02\n\nClick \"update\" at 3 AM, thinking, \"This will be quick!\" \ud83c\udf19\u23f0\n\nThen, it's 9 AM, and you're like, \"Did I just time travel, or is my computer staging a coup?\" \ud83e\udd37\u200d\u2642\ufe0f\ud83d\udda5\ufe0f\n\nAnd there's always that one update that promises to \"enhance performance,\" but all it does is turn your speedy laptop into a glorified paperweight. \ud83d\udc22\ud83d\udcbe\n\nMoral of the story? The only \"safe update\" is the one you put off indefinitely. \ud83d\ude05\ud83d\udd0c\n\n---",
     "metrics": {
       "duration": 36.0,
@@ -178,5 +124,59 @@
       "lines": 4
     },
     "timestamp": 1741174039.1034873
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ufffd  \n(If you don\u2019t get it, you\u2019re not a true dev. \ud83d\ude0f)  \n\nFollow for more tech humor!",
+    "metrics": {
+      "duration": 12.4,
+      "words": 31,
+      "lines": 4
+    },
+    "timestamp": 1741174395.666565
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s a base-8 joke. You\u2019re welcome.)  \n\nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "duration": 11.200000000000001,
+      "words": 28,
+      "lines": 4
+    },
+    "timestamp": 1741175274.212735
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf84\ud83d\udc7b  \nBecause Oct 31 == Dec 25! \ud83e\uddd1\u200d\ud83d\udcbb  \n(It\u2019s a base-8 joke. You\u2019ll get it eventually.) \ud83d\ude0f  \nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "duration": 12.0,
+      "words": 30,
+      "lines": 4
+    },
+    "timestamp": 1741175314.9487019
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\uddd1\u200d\ud83d\udcbb  \n(If you get it, you\u2019re a real one. \ud83d\ude0f)  \n\nFollow for more tech humor!",
+    "metrics": {
+      "duration": 11.200000000000001,
+      "words": 28,
+      "lines": 4
+    },
+    "timestamp": 1741175452.309134
+  },
+  {
+    "script": "When your code works but you don\u2019t know why:  \n\ud83e\uddd1\u200d\ud83d\udcbb \"I just deleted a semicolon and it fixed everything.\"  \n\ud83e\udd16 \"Congratulations, you\u2019ve unlocked *Dark Mode Debugging*.\"  \nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "duration": 12.4,
+      "words": 31,
+      "lines": 4
+    },
+    "timestamp": 1741175781.5136719
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s a base-8 joke. You\u2019ll get it eventually.)  \n\nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "duration": 12.0,
+      "words": 30,
+      "lines": 4
+    },
+    "timestamp": 1741176037.7003143
   }
 ]

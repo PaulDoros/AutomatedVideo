@@ -111,6 +111,19 @@ def format_time(seconds):
 def generate_subtitles(script: str, audio_path: str, content_type: str = None) -> str:
     """Generate SRT subtitles from script with improved timing for better synchronization"""
     try:
+        # First, check if we have a cleaned script in the JSON file
+        json_path = f"cache/scripts/{content_type}_latest.json"
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    script_data = json.load(f)
+                    if "cleaned_script" in script_data and script_data["cleaned_script"].strip():
+                        script = script_data["cleaned_script"]
+                        print(colored(f"Using pre-cleaned script from JSON file for subtitles", "green"))
+            except Exception as e:
+                print(colored(f"Error reading JSON file: {str(e)}", "yellow"))
+                # Continue with the provided script
+        
         # Get audio duration
         audio = AudioFileClip(audio_path)
         total_duration = audio.duration
@@ -120,18 +133,157 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         os.makedirs("temp/subtitles", exist_ok=True)
         subtitles_path = "temp/subtitles/generated_subtitles.srt"
         
+        # Print the original script
+        print(colored(f"Original script for subtitles:\n{script}", "blue"))
+        
         # Process script line by line to preserve original emoji positioning
         lines = script.replace('"', '').split('\n')
-        sentences = []
+        raw_sentences = []
+        
+        # Define section headers to remove (both with and without asterisks)
+        section_headers = [
+            "**Hook:**", "**Problem/Setup:**", "**Solution/Development:**", 
+            "**Result/Punchline:**", "**Call to action:**",
+            "Hook:", "Problem/Setup:", "Solution/Development:", 
+            "Result/Punchline:", "Call to action:",
+            "**Script:**", "Script:"
+        ]
+        
+        # Define patterns to filter out
+        special_patterns = ["---", "***", "**", "##"]
         
         for line in lines:
             line = line.strip()
             if not line:
                 continue
                 
+            # Skip lines that only contain special characters
+            if line in special_patterns or line.strip("-*#") == "":
+                continue
+                
             # Remove any numeric prefixes (like "1.")
             line = re.sub(r'^\d+\.\s*', '', line)
-            sentences.append(line)
+            
+            # Remove section headers
+            skip_line = False
+            for header in section_headers:
+                if line.strip().startswith(header):
+                    # Extract content after the header
+                    content = line[line.find(header) + len(header):].strip()
+                    if content:  # If there's content after the header, use it
+                        line = content
+                    else:  # If it's just a header line, skip it entirely
+                        skip_line = True
+                    break
+            
+            if not skip_line and line.strip():
+                raw_sentences.append(line)
+        
+        # Check if we have any sentences after processing
+        if not raw_sentences:
+            print(colored("Warning: No sentences found after processing. Using original script with headers removed.", "yellow"))
+            # Use the original script but remove the headers
+            for line in lines:
+                if line.strip():
+                    # Skip lines that only contain special characters
+                    if line.strip() in special_patterns or line.strip("-*#") == "":
+                        continue
+                        
+                    # Remove numeric prefixes
+                    clean_line = re.sub(r'^\d+\.\s*', '', line.strip())
+                    # Remove all section headers
+                    for header in section_headers:
+                        if header in clean_line:
+                            clean_line = clean_line.replace(header, '')
+                    if clean_line.strip():
+                        raw_sentences.append(clean_line.strip())
+        
+        # Split long sentences into smaller chunks for better readability
+        sentences = []
+        max_chars_per_subtitle = 80  # Maximum characters per subtitle line
+        
+        for sentence in raw_sentences:
+            # If sentence is short enough, add it as is
+            if len(sentence) <= max_chars_per_subtitle:
+                sentences.append(sentence)
+            else:
+                # Split by natural break points (., !, ?, :, ;)
+                parts = re.split(r'([.!?:;])', sentence)
+                
+                # Recombine the parts with their punctuation
+                chunks = []
+                current_chunk = ""
+                
+                for i in range(0, len(parts), 2):
+                    part = parts[i]
+                    punctuation = parts[i+1] if i+1 < len(parts) else ""
+                    
+                    if len(current_chunk) + len(part) + len(punctuation) <= max_chars_per_subtitle:
+                        current_chunk += part + punctuation
+                    else:
+                        # If the current chunk is not empty, add it to chunks
+                        if current_chunk:
+                            chunks.append(current_chunk)
+                        
+                        # Start a new chunk
+                        current_chunk = part + punctuation
+                
+                # Add the last chunk if it's not empty
+                if current_chunk:
+                    chunks.append(current_chunk)
+                
+                # If we couldn't split by punctuation (or the parts are still too long),
+                # split by phrases (commas) or just by length
+                if not chunks or any(len(chunk) > max_chars_per_subtitle for chunk in chunks):
+                    chunks = []
+                    parts = re.split(r'([,])', sentence)
+                    
+                    current_chunk = ""
+                    for i in range(0, len(parts), 2):
+                        part = parts[i]
+                        comma = parts[i+1] if i+1 < len(parts) else ""
+                        
+                        if len(current_chunk) + len(part) + len(comma) <= max_chars_per_subtitle:
+                            current_chunk += part + comma
+                        else:
+                            # If the current chunk is not empty, add it to chunks
+                            if current_chunk:
+                                chunks.append(current_chunk)
+                            
+                            # Start a new chunk
+                            current_chunk = part + comma
+                    
+                    # Add the last chunk if it's not empty
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                
+                # If we still have chunks that are too long, split them by length
+                final_chunks = []
+                for chunk in chunks:
+                    if len(chunk) <= max_chars_per_subtitle:
+                        final_chunks.append(chunk)
+                    else:
+                        # Split by words, trying to keep chunks under max_chars_per_subtitle
+                        words = chunk.split()
+                        current_chunk = ""
+                        
+                        for word in words:
+                            if len(current_chunk) + len(word) + 1 <= max_chars_per_subtitle:
+                                current_chunk += (" " if current_chunk else "") + word
+                            else:
+                                final_chunks.append(current_chunk)
+                                current_chunk = word
+                        
+                        if current_chunk:
+                            final_chunks.append(current_chunk)
+                
+                # Add all chunks to sentences
+                sentences.extend(final_chunks)
+        
+        # Print the processed sentences
+        print(colored(f"Processed {len(sentences)} sentences for subtitles", "blue"))
+        for i, sentence in enumerate(sentences):
+            print(colored(f"  {i+1}: {sentence}", "blue"))
         
         # Calculate total word count for better timing distribution
         total_words = sum(len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)]) 
@@ -490,6 +642,8 @@ def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: 
             log_info("Using voice audio only")
             # Normalize voice audio for consistent levels
             voice = voice.fx(afx.audio_normalize)
+            # Ensure the voice starts after exactly 1 second of silence
+            voice = voice.set_start(1.0)
             voice.write_audiofile(output_path, fps=44100, bitrate="192k")
             return output_path
         
@@ -541,6 +695,9 @@ def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: 
             # Boost voice slightly to ensure clarity over music
             voice = voice.volumex(1.2)
             
+            # Ensure the voice starts after exactly 1 second of silence
+            voice = voice.set_start(1.0)
+            
             # Composite audio - put music first in the list so voice is layered on top
             # This ensures the voice is more prominent in the mix
             final_audio = CompositeAudioClip([music, voice])
@@ -556,6 +713,8 @@ def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: 
             log_info("Falling back to voice audio only")
             # Normalize voice audio for consistent levels
             voice = voice.fx(afx.audio_normalize)
+            # Ensure the voice starts after exactly 1 second of silence
+            voice = voice.set_start(1.0)
             voice.write_audiofile(output_path, fps=44100, bitrate="192k")
             return output_path
     

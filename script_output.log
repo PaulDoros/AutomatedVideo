@@ -1,0 +1,90 @@
+✓ Freesound API client initialized
+Loaded 15 used music entries
+[nltk_data] Downloading package wordnet to C:\Users\Paul
+[nltk_data]     Doros\AppData\Roaming\nltk_data...
+[nltk_data]   Package wordnet is already up-to-date!
+[nltk_data] Downloading package wordnet to C:\Users\Paul
+[nltk_data]     Doros\AppData\Roaming\nltk_data...
+[nltk_data]   Package wordnet is already up-to-date!
+
+=== Generating content for tech_humor ===
+Using GPU acceleration: NVIDIA GeForce RTX 4080 SUPER
+Initializing Coqui TTS with model: tts_models/multilingual/multi-dataset/xtts_v2
+INFO:TTS.utils.manage:tts_models/multilingual/multi-dataset/xtts_v2 is already downloaded.
+INFO:TTS.tts.models:Using model: xtts
+Available speakers: 58
+Available languages: ['en', 'es', 'fr', 'de', 'it', 'pt', 'pl', 'tr', 'ru', 'nl', 'cs', 'ar', 'zh-cn', 'hu', 'ko', 'ja', 'hi']
+Classified 25 male voices and 29 female voices
+Total available voices: 58
+Background music: Enabled
+Music volume: 0.3
+✓ Directory structure created
+Verifying fonts...
+✓ Required fonts already exist
+
+Initializing YouTube sessions...
+INFO:googleapiclient.discovery_cache:file_cache is only supported with oauth2client<4.0.0
+✓ Initialized session for tech_humor
+  Remaining quota: 10000
+INFO:googleapiclient.discovery_cache:file_cache is only supported with oauth2client<4.0.0
+✓ Initialized session for ai_money
+  Remaining quota: 10000
+INFO:googleapiclient.discovery_cache:file_cache is only supported with oauth2client<4.0.0
+✓ Initialized session for baby_tips
+  Remaining quota: 10000
+INFO:googleapiclient.discovery_cache:file_cache is only supported with oauth2client<4.0.0
+✓ Initialized session for quick_meals
+  Remaining quota: 10000
+INFO:googleapiclient.discovery_cache:file_cache is only supported with oauth2client<4.0.0
+✓ Initialized session for fitness_motivation
+  Remaining quota: 10000
+Music volume set to 0.2
+Setting music volume to: 0.2 for better audibility
+Using JokeProvider for tech_humor channel...
+Loaded 21 jokes from E:\MoneyPrinter\Backend\resources\jokes\tech_jokes.txt
+Using DeepSeek API to generate a fresh joke
+Generating new joke with DeepSeek API...
+Successfully generated joke with DeepSeek API
+✓ Joke selected and saved
+
+Script Analysis:
+Lines: 4/10 max
+Words: 28/100 max
+Estimated Duration: 11.2s
+
+Processed Script:
+1. Why do programmers always mix up Halloween and Christmas? 🎃🎄
+2. Because Oct 31 == Dec 25! 🧑‍💻
+3. (If you get it, you’re a real one. 😏)
+4. Follow for more tech humor!
+✓ Script generated
+
+Generating video...
+
+=== Video Generation Started ===
+✓ Directory structure created
+Error creating video: Expecting value: line 1 column 1 (char 0)
+Traceback (most recent call last):
+  File "E:\MoneyPrinter\Backend\video_generator.py", line 355, in create_video
+    script_data = json.load(f)
+                  ^^^^^^^^^^^^
+  File "C:\Users\Paul Doros\AppData\Local\Programs\Python\Python311\Lib\json\__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Paul Doros\AppData\Local\Programs\Python\Python311\Lib\json\__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Paul Doros\AppData\Local\Programs\Python\Python311\Lib\json\decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Paul Doros\AppData\Local\Programs\Python\Python311\Lib\json\decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+✗ Video generation failed
+
+Content diversity scores:
+- tech_humor: 0.50/1.0
+- ai_money: 0.50/1.0
+- baby_tips: 0.50/1.0
+- quick_meals: 0.50/1.0
+- fitness_motivation: 0.50/1.0

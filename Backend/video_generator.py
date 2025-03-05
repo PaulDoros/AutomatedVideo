@@ -1,3 +1,4 @@
+from moviepy.editor import ImageClip
 import pysrt
 from main import generate_video
 from youtube import upload_video
@@ -84,6 +85,10 @@ class AudioManager:
             'fitness_motivation': ['professional', 'serious'],
             'default': ['neutral', 'friendly']
         }
+        
+        # Initialize OpenAI client
+        load_dotenv()
+        self.openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
     def select_voice(self, channel_type):
         """Select appropriate voice based on content type"""
@@ -101,7 +106,7 @@ class AudioManager:
                 return voice, channel_config['style']
         
         return list(voices.keys())[0], channel_config['style']
-        
+
     def select_coqui_voice(self, channel_type, gender=None):
         """Select a Coqui TTS voice based on channel type and gender preference"""
         try:
@@ -165,6 +170,71 @@ class AudioManager:
         except Exception as e:
             print(colored(f"Error enhancing audio: {str(e)}", "red"))
             return audio_segment
+
+    async def generate_tts_coqui(self, text, voice, emotion="neutral", speed=1.0):
+        """Generate TTS using Coqui TTS"""
+        try:
+            # Create unique filename based on voice and emotion
+            filename = f"{voice}_{emotion}_{int(time.time())}.wav"
+            output_path = os.path.join(self.voiceovers_dir, filename)
+            
+            print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed})", "blue"))
+            
+            # Generate voice using the Coqui TTS API
+            result = await self.voice_diversifier.api.generate_voice(
+                text=text,
+                speaker=voice,
+                language="en",
+                emotion=emotion,
+                speed=speed,
+                output_path=output_path
+            )
+            
+            if result:
+                # Convert WAV to MP3 for compatibility with video generation
+                mp3_path = os.path.join(self.voiceovers_dir, f"{os.path.splitext(os.path.basename(result))[0]}.mp3")
+                
+                # Use pydub to convert WAV to MP3
+                audio = AudioSegment.from_wav(result)
+                audio.export(mp3_path, format="mp3", bitrate="128k")
+                
+                print(colored(f"✓ Generated TTS audio with Coqui: {mp3_path}", "green"))
+                return mp3_path
+            else:
+                raise ValueError("Failed to generate TTS with Coqui")
+        except Exception as e:
+            print(colored(f"Coqui TTS failed: {str(e)}", "red"))
+            return None
+    
+    async def generate_tts_openai(self, text, voice="nova"):
+        """Generate TTS using OpenAI's voice API"""
+        try:
+            # Ensure we have text to synthesize
+            if not text.strip():
+                raise ValueError("Empty script for TTS generation")
+                
+            # Create unique filename
+            output_path = os.path.join(self.voiceovers_dir, f"openai_{voice}_{int(time.time())}.mp3")
+            
+            print(colored(f"Using OpenAI voice: {voice}", "blue"))
+            
+            # Call OpenAI API
+            response = await asyncio.to_thread(
+                self.openai_client.audio.speech.create,
+                model="tts-1",
+                voice=voice,
+                input=text
+            )
+            
+            # Save to file
+            response.stream_to_file(output_path)
+            
+            print(colored(f"✓ Generated TTS audio with OpenAI: {output_path}", "green"))
+            return output_path
+            
+        except Exception as e:
+            print(colored(f"OpenAI TTS failed: {str(e)}", "red"))
+            return None
 
 async def generate_tts(text, voice, output_path):
     """Generate TTS using TikTok voice"""
@@ -232,7 +302,7 @@ class VideoGenerator:
         }
         
         self._create_directories()
-
+        
         # Flag to use Coqui TTS instead of OpenAI TTS
         self.use_coqui_tts = True
 
@@ -351,16 +421,42 @@ class VideoGenerator:
             self._create_directories()
             
             # Load script from file
-            with open(script_file, 'r', encoding='utf-8') as f:
-                script_data = json.load(f)
+            try:
+                with open(script_file, 'r', encoding='utf-8') as f:
+                    try:
+                        # Try to load as JSON first
+                        script_data = json.load(f)
+                        script = script_data.get('script', '')
+                    except json.JSONDecodeError:
+                        # If not JSON, reset file pointer and read as plain text
+                        f.seek(0)
+                        script = f.read()
+            except Exception as e:
+                print(colored(f"Error loading script: {str(e)}", "red"))
+                return False
                 
-            # Extract script text
-            if isinstance(script_data, dict) and 'script' in script_data:
-                script = script_data['script']
-            else:
-                script = script_data
+            # Check if script is empty
+            if not script.strip():
+                print(colored("Error: Script is empty", "red"))
+                return False
                 
-            # Select voice based on channel type
+            # Check if we have a plain text version of the script (which might be better formatted)
+            txt_script_file = script_file.replace('.json', '.txt')
+            if os.path.exists(txt_script_file):
+                try:
+                    with open(txt_script_file, 'r', encoding='utf-8') as f:
+                        txt_script = f.read()
+                        if txt_script.strip():
+                            print(colored("Using plain text version of script for better formatting", "green"))
+                            script = txt_script
+                except Exception as e:
+                    print(colored(f"Error loading plain text script: {str(e)}", "yellow"))
+                    # Continue with the JSON script
+            
+            # Print the script being used
+            print(colored(f"Script to be used for video generation:\n{script}", "blue"))
+            
+            # Get voice for channel
             voice = self.get_voice_for_channel(channel_type)
             print(colored(f"Selected voice: {voice}", "green"))
             
@@ -414,13 +510,31 @@ class VideoGenerator:
     async def _generate_tts(self, script, channel_type):
         """Generate TTS using either Coqui TTS or OpenAI's voice"""
         try:
-            # Clean up the script - remove line numbers and preserve emojis for display
-            # but the actual TTS will have emojis removed by the _clean_text method
-            clean_script = '\n'.join(
-                line.strip().strip('"') 
-                for line in script.split('\n') 
-                if line.strip() and not line[0].isdigit()
-            )
+            # First, check if we have a cleaned script in the JSON file
+            json_path = f"cache/scripts/{channel_type}_latest.json"
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        script_data = json.load(f)
+                        if "cleaned_script" in script_data and script_data["cleaned_script"].strip():
+                            clean_script = script_data["cleaned_script"]
+                            print(colored(f"Using pre-cleaned script from JSON file", "green"))
+                            print(colored(f"Script for TTS:\n{clean_script}", "blue"))
+                        else:
+                            # Fall back to cleaning the script ourselves
+                            print(colored(f"No cleaned script found in JSON, cleaning manually", "yellow"))
+                            clean_script = self._clean_script_for_tts(script)
+                except Exception as e:
+                    print(colored(f"Error reading JSON file: {str(e)}", "yellow"))
+                    clean_script = self._clean_script_for_tts(script)
+            else:
+                # Clean the script manually
+                clean_script = self._clean_script_for_tts(script)
+            
+            # Check if the script is empty after cleaning
+            if not clean_script.strip():
+                print(colored("Warning: Script is empty after cleaning. Cannot generate TTS.", "red"))
+                return None
             
             # Use Coqui TTS for diverse voices
             if self.use_coqui_tts:
@@ -429,195 +543,111 @@ class VideoGenerator:
                     # (voice selection will be handled by the API based on whether the model supports speakers)
                     voice, emotion = self.audio_manager.select_coqui_voice(channel_type)
                     
-                    # Store the selected voice to ensure consistency
-                    print(colored(f"Selected voice: {voice} (emotion: {emotion})", "blue"))
+                    # Generate TTS using Coqui
+                    tts_path = await self.audio_manager.generate_tts_coqui(
+                        clean_script, 
+                        voice=voice, 
+                        emotion=emotion
+                    )
                     
-                    # Create unique filename based on channel type and emotion
-                    filename = f"{channel_type}_{emotion}_{int(time.time())}.wav"
-                    output_path = f"temp/tts/{filename}"
-                    
-                    # Check if the model supports multiple speakers
-                    has_speaker_support = hasattr(self.audio_manager.voice_diversifier.api, 'speakers') and self.audio_manager.voice_diversifier.api.speakers
-                    
-                    # Set speed based on content type and emotion
-                    # Dynamically adjust speed based on emotion and content type
-                    speed_multiplier = 1.0  # Default speed
-                    
-                    # Adjust speed based on emotion
-                    if emotion in ["humorous", "witty", "sarcastic"]:
-                        # Slightly faster for joke delivery
-                        speed_multiplier = 1.05
-                    elif emotion in ["energetic", "enthusiastic"]:
-                        speed_multiplier = 1.1
-                    elif emotion in ["playful"]:
-                        speed_multiplier = 1.03
-                    
-                    # Further adjust based on content type
-                    if channel_type == "tech_humor":
-                        # For tech humor, adjust speed based on emotion
-                        if emotion in ["humorous", "witty", "sarcastic"]:
-                            # Jokes need good timing - not too fast
-                            speed_multiplier = 1.05
-                        else:
-                            # For other emotions in tech humor
-                            speed_multiplier = 1.08
-                    
-                    print(colored(f"Using speed multiplier of {speed_multiplier} for {emotion} {channel_type} content", "blue"))
-                    
-                    # Confirm we're using XTTS v2
-                    print(colored("Confirming TTS model: Using XTTS v2 for high-quality voice generation", "blue"))
-                    
-                    # Split script into sentences for better TTS quality
-                    sentences = []
-                    for line in clean_script.split('\n'):
-                        # Split by common sentence terminators but preserve them
-                        parts = re.split(r'([.!?])', line)
-                        for i in range(0, len(parts)-1, 2):
-                            if parts[i].strip():
-                                sentence = parts[i] + (parts[i+1] if i+1 < len(parts) else '')
-                                sentences.append(sentence.strip())
-                    
-                    # If no sentences were found, use the whole script
-                    if not sentences:
-                        sentences = [clean_script]
-                    
-                    print(colored(f"Processing {len(sentences)} sentences for better TTS quality", "blue"))
-                    
-                    if has_speaker_support:
-                        # Generate voice using the Coqui TTS API with speaker - process sentence by sentence
-                        print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed_multiplier})", "blue"))
-                        
-                        # Generate each sentence separately for better prosody
-                        sentence_audio_files = []
-                        for i, sentence in enumerate(sentences):
-                            if not sentence.strip():
-                                continue
-                                
-                            # Add breaks between sentences for natural pauses
-                            if i > 0:
-                                sentence = f"<break time='0.2s'/> {sentence}"
-                            
-                            # Generate temporary file for this sentence
-                            sentence_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
-                            
-                            # Generate voice for this sentence
-                            result = await self.audio_manager.voice_diversifier.api.generate_voice(
-                                text=sentence,
-                                speaker=voice,  # Use the same voice for all sentences
-                                language="en",
-                                emotion=emotion,
-                                speed=speed_multiplier,
-                                output_path=sentence_path
-                            )
-                            
-                            if result:
-                                sentence_audio_files.append(result)
-                        
-                        # Combine all sentence audio files
-                        if sentence_audio_files:
-                            # Use pydub to concatenate WAV files
-                            combined = AudioSegment.empty()
-                            for audio_file in sentence_audio_files:
-                                segment = AudioSegment.from_wav(audio_file)
-                                combined += segment
-                            
-                            # Add a small silence at the end to prevent audio loop issues
-                            silence = AudioSegment.silent(duration=300)  # 300ms silence
-                            combined = combined + silence
-                            
-                            # Save combined audio
-                            combined.export(output_path, format="wav")
-                            
-                            # Clean up temporary files
-                            for audio_file in sentence_audio_files:
-                                try:
-                                    os.remove(audio_file)
-                                except:
-                                    pass
-                            
-                            print(colored(f"✓ Generated voice file: {output_path}", "green"))
-                            result = output_path
-                        else:
-                            # Fallback to generating the whole script at once
-                            result = await self.audio_manager.voice_diversifier.api.generate_voice(
-                                text=clean_script,
-                                speaker=voice,
-                                language="en",
-                                emotion=emotion,
-                                speed=speed_multiplier,
-                                output_path=output_path
-                            )
+                    if tts_path:
+                        print(colored(f"✓ Generated TTS using Coqui with voice: {voice}, emotion: {emotion}", "green"))
+                        return tts_path
                     else:
-                        # Use default voice with emotion if the model doesn't support multiple speakers
-                        print(colored(f"Using Coqui TTS default voice (emotion: {emotion}, speed: {speed_multiplier})", "blue"))
-                        
-                        # Generate voice using the Coqui TTS API without speaker
-                        result = await self.audio_manager.voice_diversifier.api.generate_voice(
-                            text=clean_script,
-                            language="en",
-                            emotion=emotion,
-                            speed=speed_multiplier,
-                            output_path=output_path
-                        )
-                    
-                    if result:
-                        # Convert WAV to MP3 for compatibility with video generation
-                        final_path = f"temp/tts/{channel_type}_latest.mp3"
-                        
-                        # Use moviepy to convert WAV to MP3 without any processing
-                        audio_clip = AudioFileClip(result)
-                        audio_clip.write_audiofile(final_path)
-                        audio_clip.close()
-                        
-                        print(colored(f"✓ Generated TTS audio with Coqui: {final_path}", "green"))
-                        return final_path
-                    else:
-                        raise ValueError("Failed to generate TTS with Coqui")
+                        print(colored("Failed to generate TTS with Coqui, falling back to OpenAI", "yellow"))
                 except Exception as e:
-                    print(colored(f"Coqui TTS failed: {str(e)}", "red"))
+                    print(colored(f"Error with Coqui TTS: {str(e)}", "yellow"))
                     print(colored("Falling back to OpenAI TTS", "yellow"))
             
             # Fall back to OpenAI TTS
-            return await self._generate_openai_tts(clean_script, channel_type)
+            voice = self.get_voice_for_channel(channel_type)
+            tts_path = await self.audio_manager.generate_tts_openai(clean_script, voice)
             
+            if tts_path:
+                print(colored(f"✓ Generated TTS using OpenAI with voice: {voice}", "green"))
+                return tts_path
+            else:
+                print(colored("Failed to generate TTS", "red"))
+                return None
+                
         except Exception as e:
-            print(colored(f"TTS Generation failed: {str(e)}", "red"))
+            print(colored(f"Error generating TTS: {str(e)}", "red"))
             return None
-
-    async def _generate_openai_tts(self, clean_script, channel_type):
-        """Generate TTS using OpenAI's voice API"""
-        try:
-            # Get appropriate voice for the channel
-            voice_config = self.get_voice_for_channel(channel_type)
-            voice = voice_config.get('voice', 'nova')
-            style = voice_config.get('style', 'neutral')
+    
+    def _clean_script_for_tts(self, script):
+        """Clean the script for TTS generation"""
+        # Clean up the script - remove line numbers and preserve emojis for display
+        # but the actual TTS will have emojis removed by the _clean_text method
+        clean_script = '\n'.join(
+            line.strip().strip('"') 
+            for line in script.split('\n') 
+            if line.strip() and not line[0].isdigit()
+        )
+        
+        # Print the script before processing
+        print(colored(f"Original script for TTS:\n{clean_script}", "blue"))
+        
+        # Remove section headers like "**HOOK:**", "Problem/Setup:", etc.
+        section_headers = [
+            "**Hook:**", "**Problem/Setup:**", "**Solution/Development:**", 
+            "**Result/Punchline:**", "**Call to action:**",
+            "Hook:", "Problem/Setup:", "Solution/Development:", 
+            "Result/Punchline:", "Call to action:",
+            "**Script:**", "Script:"
+        ]
+        
+        # Define patterns to filter out
+        special_patterns = ["---", "***", "**", "##"]
+        
+        clean_script_lines = []
+        for line in clean_script.split('\n'):
+            line_to_add = line
+            skip_line = False
             
-            print(colored(f"Using OpenAI voice: {voice} (style: {style})", "blue"))
+            # Skip lines that only contain special characters
+            if line.strip() in special_patterns or line.strip("-*#") == "":
+                skip_line = True
+                continue
             
-            # Create client
-            client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            # Check if line starts with a number followed by a period (like "1.")
+            if re.match(r'^\d+\.', line.strip()):
+                # Remove the number prefix
+                line_to_add = re.sub(r'^\d+\.\s*', '', line.strip())
             
-            # Create output path
-            os.makedirs("temp/tts", exist_ok=True)
-            output_path = f"temp/tts/{channel_type}_latest.mp3"
+            for header in section_headers:
+                if line.strip().startswith(header):
+                    # Extract content after the header
+                    content = line[line.find(header) + len(header):].strip()
+                    if content:  # If there's content after the header, use it
+                        line_to_add = content
+                    else:  # If it's just a header line, skip it entirely
+                        skip_line = True
+                    break
             
-            # Generate speech
-            response = client.audio.speech.create(
-                model="tts-1",
-                voice=voice,
-                input=clean_script,
-                speed=1.2 if channel_type == "tech_humor" else 1.0  # Faster for tech humor
-            )
-            
-            # Save to file
-            response.stream_to_file(output_path)
-            
-            print(colored(f"✓ Generated TTS audio with OpenAI and trimmed 0.1s from end", "green"))
-            return output_path
-            
-        except Exception as e:
-            print(colored(f"OpenAI TTS failed: {str(e)}", "red"))
-            return None
+            if not skip_line and line_to_add.strip():
+                clean_script_lines.append(line_to_add)
+        
+        clean_script = '\n'.join(clean_script_lines)
+        
+        # Print the cleaned script
+        print(colored(f"Cleaned script for TTS:\n{clean_script}", "blue"))
+        
+        # Check if the script is empty after cleaning
+        if not clean_script.strip():
+            print(colored("Warning: Script is empty after cleaning. Using original script.", "yellow"))
+            # Use the original script without section headers
+            clean_script = script
+            # Remove line numbers and section headers
+            clean_script = re.sub(r'^\d+\.\s*', '', clean_script)
+            for header in section_headers:
+                clean_script = clean_script.replace(header, '')
+            # Remove special patterns
+            for pattern in special_patterns:
+                clean_script = clean_script.replace(pattern, '')
+            clean_script = clean_script.strip()
+            print(colored(f"Fallback script for TTS:\n{clean_script}", "blue"))
+        
+        return clean_script
 
     async def _generate_subtitles(self, script: str, tts_path: str, channel_type: str) -> str:
         """Generate subtitles for the video"""
@@ -873,7 +903,7 @@ class VideoGenerator:
                             video.close()
                         except Exception as e:
                             print(colored(f"Error checking video {video_path}: {str(e)}", "yellow"))
-            
+                    
             if categorized_videos:
                 print(colored(f"Found {len(categorized_videos)} relevant categorized videos", "green"))
                 # If we have more than needed, randomly select some
@@ -962,7 +992,7 @@ class VideoGenerator:
                         # If we have enough videos, stop downloading
                         if len(final_videos) >= target_video_count:
                             break
-            
+                    
             # Step 5: If we still don't have enough videos, use generic search terms
             if len(final_videos) < 2 and script:
                 print(colored("Not enough videos, searching for more from Pexels", "yellow"))
@@ -1463,12 +1493,8 @@ class VideoGenerator:
                     # Export combined audio
                     combined.export(output_path, format="wav")
                     
-                    # Convert to MP3 for smaller file size
-                    mp3_path = f"temp/tts/{channel_type}_latest.mp3"
-                    combined.export(mp3_path, format="mp3", bitrate="128k")
-                    
                     print(colored(f"✓ Generated voice file: {output_path}", "green"))
-                    return mp3_path
+                    return output_path
             
             # If we get here, either no Coqui TTS or no audio files were generated
             return None
@@ -1546,10 +1572,13 @@ class VideoGenerator:
             temp_audio_path = f"{output_dir.replace('/videos', '')}/temp_audio.mp3"
             
             # Use custom output path if provided, otherwise use default
-            output_path = custom_output_path if custom_output_path else "temp_output.mp4"
+            final_output_path = custom_output_path if custom_output_path else output_path
+            
+            # Create a temporary output path for the initial video before trimming
+            temp_output_path = f"{output_dir}/temp_{timestamp}.mp4"
             
             print(colored(f"\n=== 🎥 Rendering Final Video 🎥 ===", "blue"))
-            print(colored(f"ℹ️ Output path: {output_path}", "cyan"))
+            print(colored(f"ℹ️ Output path: {final_output_path}", "cyan"))
             
             # Show a message about rendering time
             print(colored("⏳ Rendering final video... This may take a while", "cyan"))
@@ -1619,9 +1648,57 @@ class VideoGenerator:
                 "-map", "0:v:0",  # Use the entire video track
                 "-map", "1:a:0",  # Use the entire audio track
                 "-af", "afade=t=out:st=" + str(audio_duration - 0.5) + ":d=0.5",  # Add fade out to audio
-                output_path
+                temp_output_path
             ]
             subprocess.run(cmd, check=True)
+            
+            # Step 4: Trim the last second from the video
+            print(colored("⏳ Trimming the last second from the video...", "cyan"))
+            
+            # Get the duration of the generated video
+            probe_cmd = [
+                "ffprobe", 
+                "-v", "error", 
+                "-show_entries", "format=duration", 
+                "-of", "default=noprint_wrappers=1:nokey=1", 
+                temp_output_path
+            ]
+            
+            try:
+                # Get the duration of the video
+                duration_output = subprocess.check_output(probe_cmd, universal_newlines=True).strip()
+                video_duration = float(duration_output)
+                
+                # Calculate the new duration (trim the last second)
+                new_duration = max(1.0, video_duration - 1.0)
+                
+                # Trim the video using ffmpeg
+                trim_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", temp_output_path,
+                    "-t", str(new_duration),
+                    "-c:v", "copy",
+                    "-c:a", "copy",
+                    final_output_path
+                ]
+                
+                subprocess.run(trim_cmd, check=True)
+                print(colored(f"✅ Successfully trimmed video from {video_duration:.2f}s to {new_duration:.2f}s", "green"))
+                
+                # Remove the temporary output file
+                if os.path.exists(temp_output_path):
+                    os.remove(temp_output_path)
+                
+            except Exception as trim_error:
+                print(colored(f"⚠️ Warning: Error trimming video: {str(trim_error)}", "yellow"))
+                print(colored("Using the original video without trimming", "yellow"))
+                
+                # If trimming fails, just use the original output
+                if os.path.exists(temp_output_path):
+                    # Rename the temp file to the final output path
+                    if os.path.exists(final_output_path):
+                        os.remove(final_output_path)
+                    os.rename(temp_output_path, final_output_path)
             
             elapsed_time = time.time() - start_time
             print(colored(f"⏱️ Video rendered in {elapsed_time:.1f} seconds", "cyan"))
@@ -1638,7 +1715,7 @@ class VideoGenerator:
             except Exception as e:
                 print(colored(f"Warning: Error cleaning up: {str(e)}", "yellow"))
             
-            return output_path
+            return final_output_path
             
         except Exception as e:
             print(colored(f"Error generating video: {str(e)}", "red"))
@@ -1654,7 +1731,7 @@ class VideoGenerator:
         except Exception as e:
             print(colored(f"Error in generate_video: {str(e)}", "red"))
             traceback.print_exc()
-            return False
+        return False
 
     @property
     def music_volume(self):
