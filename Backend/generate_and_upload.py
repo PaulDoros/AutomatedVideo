@@ -1,5 +1,5 @@
 import asyncio
-from content_validator import ScriptGenerator
+from content_validator import ScriptGenerator, ContentValidator
 from video_generator import VideoGenerator
 from thumbnail_generator import ThumbnailGenerator
 from youtube_uploader import YouTubeUploader
@@ -13,8 +13,13 @@ import json
 import argparse
 from datetime import datetime, timedelta
 import random
+import nltk
+from joke_provider import JokeProvider
 
-async def generate_content(channel_type, topic=None):
+# Download wordnet if not already downloaded
+nltk.download('wordnet')
+
+async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload=False):
     """Generate content for a specific channel"""
     print(colored(f"\n=== Generating content for {channel_type} ===", "blue"))
     
@@ -23,6 +28,11 @@ async def generate_content(channel_type, topic=None):
     video_gen = VideoGenerator()
     thumb_gen = ThumbnailGenerator()
     content_monitor = ContentMonitor()
+    content_validator = ContentValidator()
+    
+    # Set music volume for better audibility
+    video_gen.music_volume = music_volume
+    print(colored(f"Setting music volume to: {video_gen.music_volume} for better audibility", "cyan"))
     
     # Check if topic is a duplicate
     if topic and content_monitor.is_topic_duplicate(channel_type, topic):
@@ -41,12 +51,61 @@ async def generate_content(channel_type, topic=None):
             print(colored(f"Using alternative topic: {topic}", "green"))
     
     try:
-        # 1. Generate Script
-        print(colored("\nGenerating script...", "blue"))
-        success, script = await script_gen.generate_script(
-            topic=topic,
-            channel_type=channel_type
-        )
+        # For tech_humor channel, use pre-written jokes or DeepSeek API
+        if channel_type == "tech_humor":
+            print(colored("\nUsing JokeProvider for tech_humor channel...", "blue"))
+            joke_provider = JokeProvider()
+            
+            # Check if we should use AI-generated jokes
+            # If we've used all pre-written jokes or explicitly requested AI
+            use_ai = False
+            if os.getenv("USE_AI_JOKES", "false").lower() == "true":
+                use_ai = True
+                print(colored("Using AI-generated jokes as requested in environment variables", "cyan"))
+            
+            # Get a joke (either pre-written or AI-generated)
+            script = await joke_provider.get_joke(topic, use_ai)
+            
+            # Validate the joke script
+            is_valid, analysis = content_validator.validate_script(script, channel_type)
+            if not is_valid:
+                print(colored(f"✗ Joke validation failed: {analysis.get('message', 'Unknown error')}", "yellow"))
+                # Try another joke if the first one fails validation
+                script = await joke_provider.get_joke(topic, True)  # Force AI generation for second attempt
+                is_valid, analysis = content_validator.validate_script(script, channel_type)
+                if not is_valid:
+                    print(colored(f"✗ Alternative joke validation failed: {analysis.get('message', 'Unknown error')}", "red"))
+                    return None
+            
+            # Save the script to a file for the video generator
+            script_file = f"cache/scripts/{channel_type}_latest.json"
+            os.makedirs(os.path.dirname(script_file), exist_ok=True)
+            
+            # Create a title from the first line of the joke
+            title = script.split('\n')[0]
+            
+            # Save script data
+            script_data = {
+                "script": script,
+                "title": title,
+                "channel_type": channel_type,
+                "topic": topic or "tech humor",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            with open(script_file, 'w', encoding='utf-8') as f:
+                json.dump(script_data, f, indent=2)
+                
+            print(colored("✓ Joke selected and saved", "green"))
+            success = True
+        else:
+            # For other channels, generate script as usual
+            print(colored("\nGenerating script...", "blue"))
+            success, script = await script_gen.generate_script(
+                topic=topic,
+                channel_type=channel_type
+            )
+            
         if not success:
             print(colored(f"✗ Script generation failed for {channel_type}", "red"))
             return None
@@ -60,14 +119,26 @@ async def generate_content(channel_type, topic=None):
         # 2. Generate Video
         print(colored("\nGenerating video...", "blue"))
         script_file = f"cache/scripts/{channel_type}_latest.json"
+        
+        # Create channel-specific output directory
+        channel_output_dir = f"output/videos/{channel_type}"
+        os.makedirs(channel_output_dir, exist_ok=True)
+        
+        # Generate timestamp for unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"{channel_type}_{timestamp}.mp4"
+        output_path = os.path.join(channel_output_dir, output_filename)
+        
         success = await video_gen.create_video(
             script_file=script_file,
-            channel_type=channel_type
+            channel_type=channel_type,
+            output_path=output_path
         )
         if not success:
             print(colored(f"✗ Video generation failed for {channel_type}", "red"))
             return None
         print(colored("✓ Video generated", "green"))
+        print(colored(f"✓ Video saved to: {output_path}", "cyan"))
         
         # 3. Generate Thumbnail
         print(colored("\nGenerating thumbnail...", "blue"))
@@ -79,7 +150,7 @@ async def generate_content(channel_type, topic=None):
             'channel_type': channel_type,
             'topic': topic,
             'script': script,
-            'file_path': f"output/videos/{channel_type}_latest.mp4",
+            'file_path': output_path,
             'thumbnail_path': f"test_thumbnails/{channel_type}.jpg"
         }
         
@@ -105,14 +176,30 @@ async def upload_content(video_details, schedule_id=None):
     db = VideoDatabase()
     
     try:
+        # Get thumbnail title from cache if available
+        thumbnail_title = ""
+        cache_file = f"cache/scripts/{channel_type}_latest.json"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r') as f:
+                    cached = json.load(f)
+                    thumbnail_title = cached.get('thumbnail_title', '')
+                    if thumbnail_title:
+                        print(colored(f"Using thumbnail title as video title: {thumbnail_title}", "cyan"))
+            except Exception as e:
+                print(colored(f"Warning: Could not load thumbnail title from cache: {str(e)}", "yellow"))
+        
+        # Use thumbnail title if available, otherwise use topic
+        video_title = thumbnail_title if thumbnail_title else topic
+        
         # Upload to YouTube
         print(colored("\nUploading to YouTube...", "blue"))
         success, result = await uploader.upload_video(
             channel_type=channel_type,
             video_path=file_path,
-            title=topic,
-            description=None,  # Will use script as description
-            tags=[channel_type, 'shorts', 'content']
+            title=video_title,
+            description=None,  # Will use professional description in uploader
+            tags=[channel_type, 'shorts', 'youtube', 'content']
         )
         
         if success:
@@ -253,7 +340,7 @@ async def generate_schedule(days=7):
     print(colored(f"\n=== Generated schedule with {len(schedule)} posting times ===", "green"))
     return schedule
 
-async def generate_and_upload():
+async def generate_and_upload(music_volume=0.3, no_upload=False):
     """Generate and upload content for all channels"""
     
     # Create necessary directories
@@ -274,37 +361,42 @@ async def generate_and_upload():
         print(colored(f"\n=== Processing {channel}: {topic} ===", "blue"))
         
         # Generate content
-        video_details = await generate_content(channel, topic)
+        video_details = await generate_content(channel, topic, music_volume, no_upload)
         
         if not video_details:
             continue
         
-        # Upload content
-        await upload_content(video_details)
+        # Upload content if not disabled
+        if not no_upload:
+            await upload_content(video_details)
+        else:
+            print(colored("Skipping upload as requested with --no-upload", "yellow"))
         
         print(colored(f"\n=== Completed {channel} ===", "green"))
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Generate and upload YouTube Shorts videos')
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Generate and upload content')
     
-    # Content generation options
-    parser.add_argument('--generate', action='store_true', help='Generate new content')
-    parser.add_argument('--channel', type=str, choices=['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation'], 
-                        help='Specific channel to generate content for')
-    parser.add_argument('--topic', type=str, help='Specific topic to generate content about')
-    
-    # Scheduling options
+    # Action options
+    parser.add_argument('--generate', action='store_true', help='Generate content')
     parser.add_argument('--schedule', type=int, help='Generate posting schedule for the next N days')
     parser.add_argument('--process', type=int, help='Process scheduled uploads for the next N hours')
-    
-    # Analysis options
     parser.add_argument('--analyze', action='store_true', help='Analyze performance of all channels')
     parser.add_argument('--monitor', action='store_true', help='Monitor content across all channels')
+    parser.add_argument('--cleanup', action='store_true', help='Clean up video library')
     
-    # Maintenance options
-    parser.add_argument('--cleanup', action='store_true', help='Clean up video library to prevent excessive accumulation')
+    # Generation options
+    parser.add_argument('--channel', type=str, help='Channel to generate content for')
+    parser.add_argument('--topic', type=str, help='Topic to generate content about')
+    parser.add_argument('--music-volume', type=float, default=0.2, help='Volume of background music (0.0 to 1.0)')
+    
+    # Cleanup options
     parser.add_argument('--max-videos', type=int, default=20, help='Maximum number of videos to keep per channel during cleanup')
     parser.add_argument('--days-to-keep', type=int, default=30, help='Keep videos newer than this many days during cleanup')
+    
+    # Upload options
+    parser.add_argument('--no-upload', action='store_true', help='Generate video without uploading')
     
     return parser.parse_args()
 
@@ -314,23 +406,18 @@ def main():
     # Initialize database
     db = VideoDatabase()
     
+    # Initialize YouTube uploader
+    uploader = YouTubeUploader()
+    
     # Initialize sessions for all channels
-    sessions = {}
     CHANNELS = ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
-    for channel in CHANNELS:
-        try:
-            sessions[channel] = YouTubeSessionManager(channel)
-            print(colored(f"Initialized session for {channel}", "green"))
-        except Exception as e:
-            print(colored(f"Failed to initialize session for {channel}: {str(e)}", "red"))
     
     if args.generate:
         # Generate content for a specific channel or all channels
         if args.channel:
-            generate_content_for_channel(args.channel, args.topic)
+            asyncio.run(generate_content(args.channel, args.topic, args.music_volume, args.no_upload))
         else:
-            for channel in CHANNELS:
-                generate_content_for_channel(channel)
+            asyncio.run(generate_and_upload(args.music_volume, args.no_upload))
     
     elif args.schedule:
         # Generate posting schedule for the next N days
@@ -339,7 +426,7 @@ def main():
         
     elif args.process:
         # Process scheduled uploads for the next N hours
-        process_scheduled_uploads(args.process, sessions, db)
+        asyncio.run(process_scheduled_uploads(args.process))
         
     elif args.analyze:
         # Analyze performance of all channels
@@ -363,4 +450,4 @@ def main():
         print("No action specified. Use --generate, --schedule, --process, --analyze, --monitor, or --cleanup")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    main() 

@@ -221,7 +221,13 @@ def generate():
 
         # Put everything together
         try:
-            final_video_path = generate_video(combined_video_path, tts_path, subtitles_path, n_threads or 2, subtitles_position, text_color or "#FFFF00")
+            final_video_path = generate_video(
+                background_path=combined_video_path, 
+                audio_path=tts_path, 
+                subtitles_path=subtitles_path, 
+                content_type=data.get("videoSubject", "general"),
+                script_path=script
+            )
         except Exception as e:
             print(colored(f"[-] Error generating final video: {e}", "red"))
             final_video_path = None

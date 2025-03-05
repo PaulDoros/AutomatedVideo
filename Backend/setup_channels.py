@@ -3,6 +3,9 @@ from dotenv import load_dotenv
 import json
 from termcolor import colored
 
+# Constants
+MAX_DAILY_UPLOADS_PER_CHANNEL = 10  # Maximum number of videos to upload per channel per day
+
 def setup_channels():
     """Setup all channel configurations"""
     
@@ -27,7 +30,6 @@ CHANNEL_FOOD_NAME="Quick & Healthy Meals"
 CHANNEL_PARENTING_NAME="Modern Parenting Tips"
 
 # Upload Settings
-MAX_DAILY_UPLOADS_PER_CHANNEL=3
 UPLOAD_RETRY_ATTEMPTS=3
 CONTENT_LANGUAGE="en"
 """

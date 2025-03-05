@@ -67,23 +67,80 @@ class YouTubeUploader:
                 self._log_error(channel_type, error_msg)
                 return False, error_msg
             
-            # Load cached script for description
+            # Load cached script for description and thumbnail title
             cache_file = f"cache/scripts/{channel_type}_latest.json"
             script = ""
+            thumbnail_title = ""
             
             if os.path.exists(cache_file):
                 try:
                     with open(cache_file, 'r') as f:
                         cached = json.load(f)
                         script = cached.get('script', '')
+                        thumbnail_title = cached.get('thumbnail_title', '')
                 except Exception as e:
                     print(colored(f"Warning: Could not load script from cache: {str(e)}", "yellow"))
+            
+            # Use thumbnail title for video title if available, otherwise use provided title
+            video_title = thumbnail_title if thumbnail_title else title
+            
+            # Create a professional description with hashtags
+            channel_hashtags = {
+                'tech_humor': ['#tech', '#programming', '#coding', '#developer', '#computerscience', '#softwareengineer'],
+                'ai_money': ['#ai', '#artificialintelligence', '#money', '#business', '#entrepreneur', '#sidehustle'],
+                'baby_tips': ['#parenting', '#baby', '#newborn', '#momtips', '#parentingtips', '#newmom'],
+                'quick_meals': ['#cooking', '#recipe', '#quickmeals', '#easyrecipe', '#foodie', '#homecooking'],
+                'fitness_motivation': ['#fitness', '#workout', '#motivation', '#exercise', '#gym', '#healthylifestyle']
+            }
+            
+            # Get relevant hashtags for this channel
+            relevant_hashtags = channel_hashtags.get(channel_type, ['#shorts', '#youtube'])
+            
+            # Add custom tags if provided
+            if tags and isinstance(tags, list):
+                # Convert tags to hashtags if they don't already start with #
+                custom_hashtags = [f"#{tag.strip('#')}" for tag in tags]
+                # Combine with relevant hashtags, remove duplicates, and limit to 15 total
+                all_hashtags = list(set(relevant_hashtags + custom_hashtags))[:15]
+            else:
+                all_hashtags = relevant_hashtags
+                
+            # Create a professional description
+            professional_description = ""
+            
+            # Add a brief intro based on channel type
+            channel_intros = {
+                'tech_humor': "Enjoy this tech humor short! If you work in tech, you'll definitely relate.",
+                'ai_money': "Learn how AI can help you build income streams and grow your business.",
+                'baby_tips': "Practical parenting advice to make your life easier and help your baby thrive.",
+                'quick_meals': "Quick and delicious meal ideas that anyone can make, even with a busy schedule.",
+                'fitness_motivation': "Stay motivated on your fitness journey with these quick tips and exercises."
+            }
+            
+            intro = channel_intros.get(channel_type, "Check out this short video!")
+            professional_description = f"{intro}\n\n"
+            
+            # Add the script content (first 2-3 lines only to avoid overwhelming)
+            if script:
+                script_lines = script.split('\n')
+                script_preview = '\n'.join(script_lines[:min(3, len(script_lines))])
+                professional_description += f"{script_preview}\n\n"
+            
+            # Add call to action
+            professional_description += "👍 Like and Subscribe for more content like this!\n"
+            professional_description += "🔔 Turn on notifications to never miss a new video!\n\n"
+            
+            # Add hashtags at the end
+            professional_description += ' '.join(all_hashtags)
+            
+            print(colored(f"Using title: {video_title}", "cyan"))
+            print(colored(f"Created professional description with hashtags", "cyan"))
             
             # Prepare video metadata
             body = {
                 'snippet': {
-                    'title': title,
-                    'description': description or script,
+                    'title': video_title,
+                    'description': professional_description,
                     'tags': tags,
                     'categoryId': '22'  # People & Blogs
                 },
@@ -120,7 +177,7 @@ class YouTubeUploader:
                     print(colored(f"Video ID: {video_id}", "cyan"))
                     
                     # Log successful upload
-                    self._log_success(channel_type, video_id, title)
+                    self._log_success(channel_type, video_id, video_title)
                     
                     # Break out of retry loop on success
                     break
@@ -158,8 +215,8 @@ class YouTubeUploader:
             video_data = {
                 'video_id': video_id,
                 'channel_type': channel_type,
-                'title': title,
-                'description': description or script,
+                'title': video_title,
+                'description': professional_description,
                 'tags': tags,
                 'upload_date': datetime.now().isoformat(),
                 'status': 'published',

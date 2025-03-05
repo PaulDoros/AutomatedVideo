@@ -43,33 +43,49 @@ class ContentValidator:
             total_words = sum(len(re.findall(r'\w+', line)) for line in lines)
             estimated_duration = total_words * 0.4  # 0.4 seconds per word
 
-            # Strict length validation
-            if total_words > 100:  # Hard limit on words
-                return False, {"message": f"Script too long ({total_words} words). Maximum is 100 words."}
+            # Channel-specific length limits
+            channel_limits = {
+                'tech_humor': {'max_words': 100, 'min_words': 10, 'max_duration': 60, 'max_lines': 10},
+                'ai_money': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15},
+                'baby_tips': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15},
+                'quick_meals': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15},
+                'fitness_motivation': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15}
+            }
             
-            if estimated_duration > 45:  # Hard limit on duration
-                return False, {"message": f"Script too long ({estimated_duration:.1f}s). Maximum is 45 seconds."}
+            # Get limits for this channel type, or use default limits
+            limits = channel_limits.get(channel_type, {'max_words': 150, 'min_words': 20, 'max_duration': 60, 'max_lines': 12})
             
-            if len(lines) > 8:  # Hard limit on lines
-                return False, {"message": f"Too many lines ({len(lines)}). Maximum is 8 lines."}
+            # Strict length validation - more flexible for tech_humor
+            if total_words > limits['max_words']:
+                return False, {"message": f"Script too long ({total_words} words). Maximum is {limits['max_words']} words."}
+            
+            if len(lines) > limits['max_lines']:
+                return False, {"message": f"Too many lines ({len(lines)}). Maximum is {limits['max_lines']} lines."}
 
             # Print analysis
             print(colored("\nScript Analysis:", "blue"))
-            print(colored(f"Lines: {len(lines)}/{8} max", "cyan"))
-            print(colored(f"Words: {total_words}/100 max", "cyan"))
-            print(colored(f"Estimated Duration: {estimated_duration:.1f}/45s max", "cyan"))
+            print(colored(f"Lines: {len(lines)}/{limits['max_lines']} max", "cyan"))
+            print(colored(f"Words: {total_words}/{limits['max_words']} max", "cyan"))
+            print(colored(f"Estimated Duration: {estimated_duration:.1f}s", "cyan"))
             
             # Print the processed script
             print(colored("\nProcessed Script:", "blue"))
             for i, line in enumerate(lines, 1):
                 print(colored(f"{i}. {line}", "cyan"))
 
-            # Check for minimum content
-            if total_words < 30:
-                return False, {"message": "Script too short, need at least 30 words"}
+            # Check for minimum content - more flexible for tech_humor
+            if total_words < limits['min_words']:
+                return False, {"message": f"Script too short, need at least {limits['min_words']} words"}
 
             # Save successful scripts for learning
-            if 25 <= estimated_duration <= 45:  # This is our ideal range
+            ideal_min = limits['max_duration'] * 0.4  # 40% of max duration
+            ideal_max = limits['max_duration']
+            
+            # For tech_humor, we're more flexible with the ideal range
+            if channel_type == 'tech_humor':
+                ideal_min = 10  # Even very short jokes are fine
+            
+            if ideal_min <= estimated_duration <= ideal_max:
                 self._save_successful_script(channel_type, script, {
                     "duration": estimated_duration,
                     "words": total_words,
@@ -80,7 +96,7 @@ class ContentValidator:
                 "lines": len(lines),
                 "words": total_words,
                 "estimated_duration": estimated_duration,
-                "is_ideal_length": 25 <= estimated_duration <= 45
+                "is_ideal_length": ideal_min <= estimated_duration <= ideal_max
             }
 
         except Exception as e:
@@ -483,213 +499,124 @@ Style Guidelines:
         
         return enhanced_prompt
 
-    def get_channel_prompt(self, channel_type, topic):
-        """Get channel-specific prompt template"""
-        base_length_guide = """
-        CRITICAL LENGTH REQUIREMENTS:
-        - Target length: 20-30 seconds
-        - Maximum word count: 50-60 words
-        - Aim for 4-5 lines total
-        - Each line: 10-15 words maximum
-        
-        Your script MUST fit these requirements for short-form video.
-        """
-        
-        prompts = {
-            'tech_humor': f"""
-            {base_length_guide}
-            
-            Create a SINGLE, FOCUSED tech joke/story about {topic} for short-form video.
-            Focus on ONE punchline and build up to it perfectly!
-            Remember: ONE JOKE, make it count!
+    def get_channel_prompt(self, channel_type, topic=None):
+        """Get the appropriate prompt for the channel type"""
+        base_prompt = """
+You are a professional script writer for YouTube Shorts. 
+Your task is to create engaging, concise scripts that capture attention quickly.
 
-            Style Guide:
-            - Start with a relatable tech situation
-            - Build tension with one clear setup
-            - Deliver one strong punchline
-            - Keep energy high and delivery snappy
-            
-            Structure (4-5 lines ONLY):
-            1. Hook: Relatable tech situation (10-12 words)
-            2. Setup: Build the context (10-15 words)
-            3. Tension: Add detail or twist (10-15 words)
-            4. Punchline: The big payoff (8-12 words)
-            5. Quick call to action (5-8 words)
-            
-            Example Perfect Length:
-            "Ever wonder why programmers can't fix printers? 🖨️
-            They keep saying 'It works on my machine!' 💻
-            But when they try to print their code...
-            All they get is 404: Paper not found! 😅
-            Follow for more tech fails! 🚀"
-            
-            Focus on ONE strong joke - no multiple punchlines!
-            Make it punchy, clear, and KEEP IT SHORT!
-            """,
+IMPORTANT GUIDELINES:
+"""
 
-            'ai_money': """
-            Create an INSIGHTFUL and ACTIONABLE script about {topic} for short-form video.
-            Focus on real AI opportunities and practical implementation.
-
-            Style Guide:
-            - Professional but accessible tone
-            - Data-driven insights
-            - Clear step-by-step explanations
-            - Realistic expectations
-            - Specific numbers and examples
-            - Engaging storytelling
-            
-            Content Elements:
-            - Current AI trend or opportunity
-            - Market gap or pain point
-            - Practical implementation steps
-            - Real earning potential
-            - Risk considerations
-            - Resource requirements
-            
-            Structure:
-            1. Hook: Attention-grabbing AI stat/fact
-            2. Problem: Market gap or opportunity
-            3. Solution: AI-based approach
-            4. Implementation: Step-by-step guide
-            5. Results: Expected outcomes
-            6. Validation: Proof or case study
-            7. Action steps: How to start
-            8. Engaging call to action
-            
-            Key Topics to Cover:
-            - AI tools and platforms
-            - Market research
-            - Implementation strategy
-            - Cost analysis
-            - Revenue streams
-            - Scaling potential
-            - Common pitfalls
-            - Success metrics
-            """,
-
-            'baby_tips': """
-            Create a WARM and SUPPORTIVE script about {topic} for short-form video.
-            Focus on practical, evidence-based parenting advice.
-
-            Style Guide:
-            - Nurturing and encouraging tone
-            - Clear, actionable advice
-            - Evidence-based information
-            - Empathetic understanding
-            - Realistic expectations
-            - Safety-first approach
-            
-            Content Elements:
-            - Common parenting challenge
-            - Expert-backed solution
-            - Step-by-step guidance
-            - Safety considerations
-            - Age-appropriate variations
-            - Real parent experiences
-            
-            Structure:
-            1. Hook: Relatable parenting moment
-            2. Challenge: Common situation
-            3. Solution: Expert advice
-            4. Implementation: How-to steps
-            5. Variations: Age adaptations
-            6. Safety notes: Important considerations
-            7. Success indicators: What to expect
-            8. Supportive call to action
-            
-            Key Areas to Address:
-            - Child development stages
-            - Safety considerations
-            - Expert recommendations
-            - Common concerns
-            - Practical tips
-            - Parent self-care
-            - Support resources
-            """,
-
+        # Channel-specific length guidelines
+        length_guidelines = {
+            'tech_humor': """
+- Keep it SHORT and ENGAGING: 15-60 seconds when read aloud
+- Word count: 10-100 words
+- Structure: 3-10 lines maximum
+- Focus on ONE clear punchline or joke
+""",
             'quick_meals': """
-            Create an ENERGETIC and PRACTICAL script about {topic} for short-form video.
-            Focus on delicious, time-saving meal solutions.
-
-            Style Guide:
-            - Enthusiastic and encouraging tone
-            - Clear, concise instructions
-            - Time-saving tips
-            - Practical ingredient choices
-            - Visual appeal focus
-            - Engaging food descriptions
-            
-            Content Elements:
-            - Quick recipe overview
-            - Time-saving techniques
-            - Ingredient substitutions
-            - Kitchen hacks
-            - Plating tips
-            - Nutrition highlights
-            
-            Structure:
-            1. Hook: Mouth-watering intro
-            2. Recipe overview: Time/difficulty
-            3. Ingredients: Simple list
-            4. Quick steps: Clear process
-            5. Pro tips: Time savers
-            6. Variations: Easy swaps
-            7. Final presentation
-            8. Tasty call to action
-            
-            Key Features:
-            - Prep time under 30 mins
-            - Common ingredients
-            - Tool substitutions
-            - Storage tips
-            - Batch cooking options
-            - Nutritional benefits
-            - Flavor enhancers
-            """,
-
+- Keep it CONCISE but INFORMATIVE: 30-90 seconds when read aloud
+- Word count: 80-200 words
+- Structure: 5-15 lines maximum
+- Focus on ONE clear recipe or cooking tip
+""",
+            'ai_money': """
+- Keep it ACTIONABLE and FOCUSED: 30-90 seconds when read aloud
+- Word count: 80-200 words
+- Structure: 5-15 lines maximum
+- Focus on ONE specific AI tool or money-making strategy
+""",
+            'baby_tips': """
+- Keep it HELPFUL and PRACTICAL: 30-90 seconds when read aloud
+- Word count: 80-200 words
+- Structure: 5-15 lines maximum
+- Focus on ONE specific parenting tip or solution
+""",
             'fitness_motivation': """
-            Create an INSPIRING and ENERGIZING script about {topic} for short-form video.
-            Focus on achievable fitness goals and motivation.
-
-            Style Guide:
-            - High-energy, motivational tone
-            - Clear exercise instruction
-            - Form-focused guidance
-            - Inclusive language
-            - Progress-oriented
-            - Safety-conscious
-            
-            Content Elements:
-            - Motivational hook
-            - Exercise demonstration
-            - Form guidance
-            - Modification options
-            - Progress tracking
-            - Mental benefits
-            
-            Structure:
-            1. Hook: Motivational opener
-            2. Challenge: Fitness goal
-            3. Technique: Proper form
-            4. Progression: Level options
-            5. Tips: Success secrets
-            6. Benefits: Results preview
-            7. Motivation: Inspiration
-            8. Energetic call to action
-            
-            Key Components:
-            - Form cues
-            - Safety checks
-            - Modification levels
-            - Progress metrics
-            - Recovery tips
-            - Mental strategies
-            - Success habits
-            """
+- Keep it ENERGETIC and MOTIVATIONAL: 30-90 seconds when read aloud
+- Word count: 80-200 words
+- Structure: 5-15 lines maximum
+- Focus on ONE specific workout tip or fitness motivation
+"""
         }
         
-        return prompts.get(channel_type, "").format(topic=topic)
+        # Get length guidelines for this channel type, or use default
+        guidelines = length_guidelines.get(channel_type, length_guidelines['tech_humor'])
+        
+        base_prompt += guidelines
+
+        # Add channel-specific content guidelines
+        if channel_type == "tech_humor":
+            prompt = base_prompt + f"""
+- TONE: Humorous, witty, slightly sarcastic
+- CONTENT: Focus on tech jokes, programmer humor, or funny tech situations related to {topic if topic else "technology"}
+- STYLE: Use puns, unexpected twists, or relatable tech frustrations
+- FORMAT: Can be a short joke, a funny observation, or a humorous tech tip
+- IMPORTANT: Make it genuinely funny! Avoid clichés and predictable punchlines.
+"""
+        elif channel_type == "ai_money":
+            prompt = base_prompt + f"""
+- TONE: Informative, exciting, motivational
+- CONTENT: Focus on AI tools for making money, side hustles, or passive income related to {topic if topic else "AI opportunities"}
+- STYLE: Use concrete examples, specific tools, and actionable advice
+- FORMAT: Quick tip, tool introduction, or money-making strategy
+- IMPORTANT: Provide SPECIFIC, ACTIONABLE advice that viewers can implement immediately.
+"""
+        elif channel_type == "baby_tips":
+            prompt = base_prompt + f"""
+- TONE: Helpful, warm, supportive
+- CONTENT: Focus on practical baby care tips, parenting hacks, or child development insights related to {topic if topic else "baby care"}
+- STYLE: Use evidence-based information, relatable situations, and gentle advice
+- FORMAT: Quick tip, solution to common problem, or developmental milestone explanation
+- IMPORTANT: Provide PRACTICAL advice that tired parents can easily implement.
+"""
+        elif channel_type == "quick_meals":
+            prompt = base_prompt + f"""
+- TONE: Enthusiastic, practical, encouraging
+- CONTENT: Focus on easy recipes, cooking hacks, or meal prep tips related to {topic if topic else "quick cooking"}
+- STYLE: Use simple ingredients, minimal steps, and time-saving techniques
+- FORMAT: Recipe walkthrough, cooking tip, or food hack
+- IMPORTANT: Keep recipes SIMPLE with FEW ingredients and CLEAR instructions.
+"""
+        elif channel_type == "fitness_motivation":
+            prompt = base_prompt + f"""
+- TONE: Energetic, motivational, supportive
+- CONTENT: Focus on workout tips, fitness motivation, or healthy habits related to {topic if topic else "fitness"}
+- STYLE: Use encouraging language, achievable goals, and scientific facts
+- FORMAT: Quick exercise demo, motivational message, or fitness hack
+- IMPORTANT: Make workouts ACCESSIBLE to beginners while still CHALLENGING for regulars.
+"""
+        else:
+            prompt = base_prompt + f"""
+- TONE: Engaging, informative, conversational
+- CONTENT: Focus on valuable information, interesting facts, or useful tips related to {topic if topic else "this topic"}
+- STYLE: Use clear language, specific examples, and actionable advice
+- FORMAT: Quick tip, interesting fact, or helpful explanation
+"""
+
+        # Add specific topic instruction
+        if topic:
+            prompt += f"""
+SPECIFIC TOPIC: Create a script about {topic}. Focus on ONE clear message or takeaway.
+"""
+        else:
+            prompt += """
+Choose a trending, engaging topic for this channel. Focus on ONE clear message or takeaway.
+"""
+
+        # Add example structure
+        prompt += """
+STRUCTURE EXAMPLE:
+1. Hook: Attention-grabbing opening (10-15 words)
+2. Problem/Setup: Identify the situation (10-20 words)
+3. Solution/Development: Present key information (20-50 words)
+4. Result/Punchline: Deliver the main point (10-20 words)
+5. Call to action: Engage viewers (5-10 words)
+"""
+
+        return prompt
 
     def _load_successful_scripts(self, channel_type: str) -> list:
         """Load previously successful scripts"""

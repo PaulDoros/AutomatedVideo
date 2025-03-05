@@ -19,24 +19,38 @@ async def test_uploads():
             print(colored(f"✗ Video file not found for {channel}", "red"))
             continue
 
-        # Get title from script
+        # Get title and thumbnail title from script
         cache_file = f"cache/scripts/{channel}_latest.json"
+        title = f"Test video for {channel}"
+        thumbnail_title = ""
+        script = ""
+        
         if os.path.exists(cache_file):
-            with open(cache_file, 'r') as f:
-                cached = json.load(f)
-                script = cached.get('script', '')
-                # Extract title from script
-                title = script.split('\n')[0].strip('*# ')
-        else:
-            title = f"Test video for {channel}"
+            try:
+                with open(cache_file, 'r') as f:
+                    cached = json.load(f)
+                    script = cached.get('script', '')
+                    thumbnail_title = cached.get('thumbnail_title', '')
+                    
+                    # Use thumbnail title if available, otherwise extract from script
+                    if thumbnail_title:
+                        title = thumbnail_title
+                        print(colored(f"Using thumbnail title: {title}", "cyan"))
+                    else:
+                        # Extract title from script (first line)
+                        title = script.split('\n')[0].strip('*# ')
+                        print(colored(f"Using first line of script as title: {title}", "cyan"))
+            except Exception as e:
+                print(colored(f"Warning: Could not load script from cache: {str(e)}", "yellow"))
+                title = f"Test video for {channel}"
 
         # Upload
         success, result = await uploader.upload_video(
             channel_type=channel,
             video_path=video_path,
             title=title,
-            description=None,  # Will use script as description
-            tags=[channel, 'test', 'content']
+            description=None,  # Will use professional description in uploader
+            tags=[channel, 'test', 'shorts', 'youtube', 'content']
         )
         
         if success:

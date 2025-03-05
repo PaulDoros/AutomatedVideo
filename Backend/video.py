@@ -29,6 +29,9 @@ import math
 import time
 import shutil
 import subprocess
+import asyncio
+from music_provider import MusicProvider
+import concurrent.futures
 
 # First activate your virtual environment and install pysrt:
 # python -m pip install pysrt --no-cache-dir
@@ -379,8 +382,16 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
         return None
 
 def get_background_music(content_type: str, duration: float = None) -> str:
-    """Get background music from Pixabay based on content type"""
+    """Get background music based on content type"""
     try:
+        # Use the new music provider to get music
+        music_path = asyncio.run(music_provider.get_music_for_channel(content_type, duration))
+        
+        if music_path and os.path.exists(music_path):
+            print(colored(f"✓ Using background music for {content_type}", "green"))
+            return music_path
+        
+        # Fallback to the old method if the new provider fails
         # Load Pixabay API key from env
         pixabay_api_key = os.getenv('PIXABAY_API_KEY')
         if not pixabay_api_key:
@@ -449,40 +460,119 @@ def get_background_music(content_type: str, duration: float = None) -> str:
         print(colored(f"Error getting background music: {str(e)}", "red"))
         return ""  # Return empty string instead of None
 
-def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: float = 0.1) -> str:
-    """Mix voice audio with background music"""
+def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: float = 0.3, 
+             fade_in: float = 2.0, fade_out: float = 3.0) -> str:
+    """
+    Mix voice audio with background music with enhanced quality and balance.
+    
+    Args:
+        voice_path: Path to voice audio file
+        music_path: Path to background music file
+        output_path: Path to save mixed audio
+        music_volume: Volume of background music (0.0 to 1.0)
+        fade_in: Duration of fade in for music (seconds)
+        fade_out: Duration of fade out for music (seconds)
+        
+    Returns:
+        Path to mixed audio file
+    """
     try:
-        # Load audio clips
+        log_info(f"Mixing audio with music volume: {music_volume} (fade in: {fade_in}s, fade out: {fade_out}s)")
+        
+        # Load voice audio
         voice = AudioFileClip(voice_path)
-        music = AudioFileClip(music_path)
-
-        # Loop music if needed
-        if music.duration < voice.duration:
-            loops = int(np.ceil(voice.duration / music.duration))
-            music = concatenate_audioclips([music] * loops)
+        voice_duration = voice.duration
+        log_info(f"Voice duration: {voice_duration:.2f}s")
         
-        # Trim music to match voice duration
-        music = music.subclip(0, voice.duration)
+        # Check if music path exists and is valid
+        if not music_path or not os.path.exists(music_path):
+            log_warning(f"No valid music path provided: {music_path}")
+            log_info("Using voice audio only")
+            # Normalize voice audio for consistent levels
+            voice = voice.fx(afx.audio_normalize)
+            voice.write_audiofile(output_path, fps=44100, bitrate="192k")
+            return output_path
         
-        # Adjust music volume
-        music = music.volumex(music_volume)
-        
-        # Composite audio
-        final_audio = CompositeAudioClip([voice, music])
-        
-        # Write output
-        final_audio.write_audiofile(output_path, fps=44100)
-        
-        # Clean up
-        voice.close()
-        music.close()
-        final_audio.close()
-        
-        return output_path
-
+        # Load and prepare music
+        try:
+            music = AudioFileClip(music_path)
+            
+            # Get file size in MB and duration for logging
+            music_size_mb = os.path.getsize(music_path) / (1024 * 1024)
+            music_duration = music.duration
+            log_info(f"Music file: {os.path.basename(music_path)}")
+            log_info(f"Music duration: {music_duration:.2f}s, size: {music_size_mb:.2f} MB")
+            
+            # Apply dynamic volume adjustment to music
+            try:
+                # Create a function that adjusts volume dynamically
+                def adjust_volume(t):
+                    # Reduce volume during speech segments
+                    # This is a simple ducking effect - can be enhanced with more sophisticated analysis
+                    return music_volume
+                
+                # Apply volume adjustment with error handling
+                music = music.fl(lambda gf, t: gf(t) * adjust_volume(t), keep_duration=True)
+            except ValueError as e:
+                log_warning(f"Error applying dynamic volume: {str(e)}")
+                # Fallback to simple volume adjustment
+                music = music.volumex(music_volume)
+            
+            # Apply fades to music
+            if fade_in > 0:
+                music = music.audio_fadein(fade_in)
+            
+            if fade_out > 0:
+                music = music.audio_fadeout(fade_out)
+            
+            # Handle music duration relative to voice
+            if music_duration < voice_duration:
+                log_info(f"Music shorter than voice ({music_duration:.2f}s < {voice_duration:.2f}s), looping")
+                # Loop music to match voice duration
+                music = afx.audio_loop(music, duration=voice_duration)
+            elif music_duration > voice_duration:
+                log_info(f"Music longer than voice ({music_duration:.2f}s > {voice_duration:.2f}s), trimming")
+                # Trim music to match voice duration
+                music = music.subclip(0, voice_duration)
+            
+            # Normalize voice audio for consistent levels
+            voice = voice.fx(afx.audio_normalize)
+            
+            # Boost voice slightly to ensure clarity over music
+            voice = voice.volumex(1.2)
+            
+            # Composite audio - put music first in the list so voice is layered on top
+            # This ensures the voice is more prominent in the mix
+            final_audio = CompositeAudioClip([music, voice])
+            
+            # Write the mixed audio to the output path with high quality settings
+            final_audio.write_audiofile(output_path, fps=44100, bitrate="192k")
+            
+            log_success(f"Successfully mixed voice and music: {os.path.basename(music_path)}")
+            return output_path
+            
+        except Exception as music_error:
+            log_warning(f"Error processing music: {str(music_error)}")
+            log_info("Falling back to voice audio only")
+            # Normalize voice audio for consistent levels
+            voice = voice.fx(afx.audio_normalize)
+            voice.write_audiofile(output_path, fps=44100, bitrate="192k")
+            return output_path
+    
     except Exception as e:
-        print(colored(f"Error mixing audio: {str(e)}", "red"))
-        return None
+        log_error(f"Error mixing audio: {str(e)}")
+        log_warning(f"Falling back to voice audio only")
+        
+        # Make sure we actually copy the voice audio to the output path
+        try:
+            # Copy the voice audio to the output path
+            shutil.copy(voice_path, output_path)
+            log_info(f"Copied voice audio to {output_path}")
+            return output_path
+        except Exception as copy_error:
+            log_error(f"Error copying voice audio: {str(copy_error)}")
+            # If we can't even copy the file, return the original voice path
+            return voice_path
 
 def resize_to_vertical(clip):
     """Resize video clip to vertical format"""
@@ -881,7 +971,7 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         log_error(f"Text content: {txt}")
         return None
 
-def trim_audio_file(audio_path, trim_end=0.15):
+def trim_audio_file(audio_path, output_path=None, trim_end=0.15):
     """Trim silence and artifacts from audio file"""
     try:
         print(colored(f"Trimming audio file: {audio_path}", "cyan"))
@@ -901,15 +991,16 @@ def trim_audio_file(audio_path, trim_end=0.15):
         # Add a gentle fade out
         trimmed_audio = trimmed_audio.audio_fadeout(0.2)
         
-        # Save to the same path
-        trimmed_audio.write_audiofile(audio_path, fps=44100)
+        # Save to the specified output path or the same path if not provided
+        output_path = output_path if output_path else audio_path
+        trimmed_audio.write_audiofile(output_path, fps=44100)
         
         # Clean up
         audio.close()
         trimmed_audio.close()
         
         print(colored(f"✓ Trimmed {trim_end}s from end of audio", "green"))
-        return audio_path
+        return output_path
         
     except Exception as e:
         print(colored(f"Error trimming audio: {str(e)}", "red"))
@@ -1058,7 +1149,8 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
         log_error(traceback.format_exc())
         return base_video
 
-def generate_video(background_path, audio_path, subtitles_path=None, content_type=None, target_duration=None):
+def generate_video(background_path, audio_path, subtitles_path=None, content_type=None, target_duration=None, 
+                  use_background_music=True, music_volume=0.3, music_fade_in=2.0, music_fade_out=3.0, script_path=None):
     """Generate a video with audio and subtitles"""
     try:
         log_section("Video Generation", "🎬")
@@ -1170,9 +1262,158 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
             
             # Add audio to video with delay
             log_processing("Adding audio to video with delay")
-            # Set the audio to start after the start_padding
-            delayed_audio = audio.set_start(start_padding)
-            video = background_video.set_audio(delayed_audio)
+            
+            # Add background music if enabled
+            if use_background_music:
+                try:
+                    log_processing("Adding audio to video with delay")
+                    
+                    # Initialize music provider
+                    from music_provider import MusicProvider
+                    music_provider = MusicProvider()
+                    if music_provider.initialize_freesound_client():
+                        log_success("Freesound API client initialized")
+                    
+                    # Load used music to avoid repetition
+                    music_provider.load_used_music()
+                    
+                    # Get background music for the content type
+                    log_info(f"Getting background music for {content_type}...")
+                    
+                    # Get music path - first try to extract keywords from script if available
+                    music_path = None
+                    video_keywords = []
+                    
+                    if script_path and os.path.exists(script_path):
+                        try:
+                            # Read the script file
+                            with open(script_path, 'r', encoding='utf-8') as f:
+                                script_text = f.read()
+                            
+                            # Extract keywords from script
+                            import re
+                            from collections import Counter
+                            import nltk
+                            from nltk.corpus import stopwords
+                            
+                            try:
+                                nltk.data.find('corpora/stopwords')
+                            except LookupError:
+                                nltk.download('stopwords')
+                            
+                            # Clean the script text
+                            script_text = re.sub(r'[^\w\s]', '', script_text.lower())
+                            
+                            # Tokenize and count words
+                            words = script_text.split()
+                            stop_words = set(stopwords.words('english'))
+                            filtered_words = [word for word in words if word not in stop_words and len(word) > 3]
+                            
+                            # Count word frequency
+                            word_count = Counter(filtered_words)
+                            
+                            # Get the most frequent words as keywords
+                            sorted_words = sorted(word_count.items(), key=lambda x: x[1], reverse=True)
+                            video_keywords = [word for word, count in sorted_words[:5]]
+                            log_info(f"Extracted keywords from script: {', '.join(video_keywords)}")
+                        except Exception as e:
+                            log_warning(f"Error extracting keywords from script: {str(e)}")
+                    
+                    # Handle async call properly based on context
+                    try:
+                        # Try to get the current event loop
+                        loop = asyncio.get_event_loop()
+                        
+                        # Create a synchronous version of the async function
+                        def get_music_sync():
+                            # Use a new event loop in a separate thread to avoid conflicts
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                # Use the new download_music_for_video function if keywords are available
+                                if video_keywords:
+                                    return new_loop.run_until_complete(
+                                        music_provider.download_music_for_video(content_type, video_keywords, video_duration)
+                                    )
+                                else:
+                                    return new_loop.run_until_complete(
+                                        music_provider.get_music_for_channel(content_type, video_duration)
+                                    )
+                            finally:
+                                new_loop.close()
+                        
+                        # Run the synchronous function in a thread executor
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            music_path = executor.submit(get_music_sync).result(timeout=30)
+                            
+                    except Exception as e:
+                        log_warning(f"Error in async music retrieval: {str(e)}")
+                        # Fallback to a default music file
+                        music_path = music_provider.get_default_music(content_type)
+                    
+                    if music_path and os.path.exists(music_path):
+                        # Get file size and name for logging
+                        file_size = os.path.getsize(music_path) / (1024 * 1024)  # MB
+                        file_name = os.path.basename(music_path)
+                        
+                        log_info(f"Adding background music: {file_name}")
+                        log_info(f"Music file size: {file_size:.2f} MB")
+                        log_info(f"Music volume: {music_volume} (fade in: {music_fade_in}s, fade out: {music_fade_out}s)")
+                        
+                        # Create a temporary file for the mixed audio
+                        mixed_audio_path = f"temp/mixed_audio_{uuid.uuid4()}.mp3"
+                        
+                        # Set the audio to start after the start_padding
+                        delayed_audio_path = f"temp/delayed_audio_{uuid.uuid4()}.mp3"
+                        delayed_audio = audio.set_start(start_padding)
+                        delayed_audio.write_audiofile(delayed_audio_path)
+                        
+                        # Mix the audio using our enhanced mix_audio function
+                        mixed_audio_path = mix_audio(
+                            voice_path=delayed_audio_path,
+                            music_path=music_path,
+                            output_path=mixed_audio_path,
+                            music_volume=music_volume,
+                            fade_in=music_fade_in,
+                            fade_out=music_fade_out
+                        )
+                        
+                        if mixed_audio_path and os.path.exists(mixed_audio_path):
+                            # Load the mixed audio
+                            final_audio = AudioFileClip(mixed_audio_path)
+                            
+                            # Set audio to video
+                            video = background_video.set_audio(final_audio)
+                            log_success("Added background music to video using enhanced mixing")
+                            log_info(f"Music: {os.path.basename(music_path)} | Volume: {music_volume}")
+                        else:
+                            # No music found, just use voice audio
+                            log_warning(f"Failed to mix audio, using voice audio only")
+                            delayed_audio = audio.set_start(start_padding)
+                            video = background_video.set_audio(delayed_audio)
+                        
+                        # Clean up temporary files
+                        try:
+                            if os.path.exists(delayed_audio_path):
+                                os.remove(delayed_audio_path)
+                            if mixed_audio_path and os.path.exists(mixed_audio_path):
+                                os.remove(mixed_audio_path)
+                        except Exception as e:
+                            log_warning(f"Error cleaning up temporary audio files: {str(e)}")
+                    else:
+                        # No music found, just use voice audio
+                        log_warning(f"No background music found for {content_type}, using voice audio only")
+                        delayed_audio = audio.set_start(start_padding)
+                        video = background_video.set_audio(delayed_audio)
+                except Exception as e:
+                    log_warning(f"Error adding background music: {str(e)}")
+                    # No music found, just use voice audio
+                    delayed_audio = audio.set_start(start_padding)
+                    video = background_video.set_audio(delayed_audio)
+            else:
+                # Background music disabled, just use voice audio
+                delayed_audio = audio.set_start(start_padding)
+                video = background_video.set_audio(delayed_audio)
             
             # Process subtitles if provided
             if subtitles_path and os.path.exists(subtitles_path):
@@ -1446,7 +1687,7 @@ def generate_video_thumbnail(script, content_type):
         if 'overlay' in template['effects']:
             overlay = Image.new('RGB', (1080, 1920), template['bg_color'])
             img = Image.blend(img, overlay, 0.4)
-            
+        
         # Load fonts
         try:
             title_font = ImageFont.truetype(generator.montserrat_bold, template['font_size'])

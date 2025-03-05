@@ -27,67 +27,131 @@ class ThumbnailGenerator:
         
         # Always run font setup to verify fonts
         print(colored("Verifying fonts...", "blue"))
-        from setup_fonts import download_fonts
-        download_fonts()
+        try:
+            # Try direct import first
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from Backend.setup_fonts import download_fonts
+            download_fonts()
+        except ImportError:
+            try:
+                # Try relative import
+                import setup_fonts
+                setup_fonts.download_fonts()
+            except ImportError:
+                print("Warning: Could not import setup_fonts module. Font verification skipped.")
+                print("Fonts may not be available for thumbnail generation.")
         
-        # Setup Pexels API access (if API key is available)
+        # Setup API access for image sources
         self.pexels_api_key = os.environ.get('PEXELS_API_KEY', None)
+        self.pixabay_api_key = os.environ.get('PIXABAY_API_KEY', None)
+        
+        if not self.pexels_api_key and not self.pixabay_api_key:
+            print(colored("Warning: No API keys found for Pexels or Pixabay. Using local backgrounds only.", "yellow"))
         
     def fetch_relevant_image(self, content_type, keywords=None):
-        """Fetch a relevant image from Pexels or use local fallback"""
-        if not self.pexels_api_key:
-            print(colored("No Pexels API key found, using local backgrounds", "yellow"))
-            return self.get_local_background(content_type)
-            
-        try:
-            # Determine search query based on content type and keywords
-            search_terms = {
-                'tech_humor': ['programming', 'computer', 'coding', 'technology'],
-                'coding_tips': ['coding', 'developer', 'programming', 'software'],
-                'life_hack': ['productivity', 'organization', 'life hack', 'tips'],
-                'food_recipe': ['cooking', 'food', 'kitchen', 'ingredients'],
-                'fitness_motivation': ['fitness', 'workout', 'exercise', 'gym']
-            }
-            
-            # Use provided keywords or fall back to content type
-            if keywords:
-                search_query = "+".join(keywords.split()[:2])
-            else:
-                search_options = search_terms.get(content_type, ['background'])
-                search_query = random.choice(search_options)
-            
-            # Make API request to Pexels
-            headers = {'Authorization': self.pexels_api_key}
-            params = {
-                'query': search_query,
-                'orientation': 'portrait',
-                'per_page': 10
-            }
-            
-            response = requests.get('https://api.pexels.com/v1/search', headers=headers, params=params)
-            data = response.json()
-            
-            if 'photos' in data and data['photos']:
-                # Get a random photo from results
-                photo = random.choice(data['photos'])
-                image_url = photo['src']['portrait']  # Use portrait size for shorts
+        """Fetch a relevant image from Pexels/Pixabay or use local fallback"""
+        # Try Pexels first if API key is available
+        if self.pexels_api_key:
+            try:
+                # Determine search query based on content type and keywords
+                search_terms = {
+                    'tech_humor': ['programming', 'computer', 'coding', 'technology'],
+                    'coding_tips': ['coding', 'developer', 'programming', 'software'],
+                    'life_hack': ['productivity', 'organization', 'life hack', 'tips'],
+                    'food_recipe': ['cooking', 'food', 'kitchen', 'ingredients'],
+                    'fitness_motivation': ['fitness', 'workout', 'exercise', 'gym']
+                }
                 
-                # Download the image
-                img_response = requests.get(image_url)
-                img = Image.open(BytesIO(img_response.content))
+                # Use provided keywords or fall back to content type
+                if keywords:
+                    search_query = "+".join(keywords.split()[:2])
+                else:
+                    search_options = search_terms.get(content_type, ['background'])
+                    search_query = random.choice(search_options)
                 
-                # Resize to fit shorts format (9:16)
-                img = self.resize_and_crop_image(img, self.vertical_size)
+                # Make API request to Pexels
+                headers = {'Authorization': self.pexels_api_key}
+                params = {
+                    'query': search_query,
+                    'orientation': 'portrait',
+                    'per_page': 10
+                }
                 
-                print(colored(f"✓ Downloaded image from Pexels: {image_url}", "green"))
-                return img
-            else:
-                print(colored("No images found on Pexels, using local fallback", "yellow"))
-                return self.get_local_background(content_type)
+                response = requests.get('https://api.pexels.com/v1/search', headers=headers, params=params)
+                data = response.json()
                 
-        except Exception as e:
-            print(colored(f"Error fetching image from Pexels: {str(e)}", "red"))
-            return self.get_local_background(content_type)
+                if 'photos' in data and data['photos']:
+                    # Get a random photo from results
+                    photo = random.choice(data['photos'])
+                    image_url = photo['src']['portrait']  # Use portrait size for shorts
+                    
+                    # Download the image
+                    img_response = requests.get(image_url)
+                    img = Image.open(BytesIO(img_response.content))
+                    
+                    # Resize to fit shorts format (9:16)
+                    img = self.resize_and_crop_image(img, self.vertical_size)
+                    
+                    print(colored(f"✓ Downloaded image from Pexels: {image_url}", "green"))
+                    return img
+                else:
+                    print(colored("No images found on Pexels, trying Pixabay...", "yellow"))
+            except Exception as e:
+                print(colored(f"Error fetching image from Pexels: {str(e)}", "red"))
+                print(colored("Trying Pixabay as fallback...", "yellow"))
+        
+        # Try Pixabay if Pexels failed or no Pexels API key
+        if self.pixabay_api_key:
+            try:
+                # Use provided keywords or fall back to content type
+                if keywords:
+                    search_query = "+".join(keywords.split()[:2])
+                else:
+                    search_options = {
+                        'tech_humor': ['technology', 'computer', 'programming'],
+                        'ai_money': ['artificial intelligence', 'business', 'technology'],
+                        'baby_tips': ['baby', 'parenting', 'family'],
+                        'quick_meals': ['food', 'cooking', 'meal'],
+                        'fitness_motivation': ['fitness', 'workout', 'exercise']
+                    }
+                    options = search_options.get(content_type, ['background'])
+                    search_query = random.choice(options)
+                
+                # Make API request to Pixabay
+                params = {
+                    'key': self.pixabay_api_key,
+                    'q': search_query,
+                    'image_type': 'photo',
+                    'orientation': 'vertical',
+                    'per_page': 10
+                }
+                
+                response = requests.get('https://pixabay.com/api/', params=params)
+                data = response.json()
+                
+                if 'hits' in data and data['hits']:
+                    # Get a random photo from results
+                    photo = random.choice(data['hits'])
+                    image_url = photo['largeImageURL']
+                    
+                    # Download the image
+                    img_response = requests.get(image_url)
+                    img = Image.open(BytesIO(img_response.content))
+                    
+                    # Resize to fit shorts format (9:16)
+                    img = self.resize_and_crop_image(img, self.vertical_size)
+                    
+                    print(colored(f"✓ Downloaded image from Pixabay: {image_url}", "green"))
+                    return img
+                else:
+                    print(colored("No images found on Pixabay, using local fallback", "yellow"))
+            except Exception as e:
+                print(colored(f"Error fetching image from Pixabay: {str(e)}", "red"))
+        
+        # Fall back to local background if both APIs fail
+        print(colored("Using local background as fallback", "yellow"))
+        return self.get_local_background(content_type)
             
     def get_local_background(self, content_type):
         """Get a background from local assets or generate a gradient"""
@@ -241,7 +305,7 @@ class ThumbnailGenerator:
             
             # Fetch or create background image
             try:
-                # Try to get a relevant image from Pexels
+                # Try to get a relevant image from Pexels or Pixabay
                 background = self.fetch_relevant_image(content_type, thumbnail_title)
             except Exception as e:
                 print(colored(f"Error getting image from API: {str(e)}", "yellow"))
@@ -403,29 +467,30 @@ class ThumbnailGenerator:
     def generate_test_thumbnails(self):
         """Generate test thumbnails for each content type"""
         try:
-            print(colored("\n=== Generating Test Thumbnails ===", "blue"))
-            
-            # Create test_thumbnails directory if it doesn't exist
+            # Create test thumbnails directory if it doesn't exist
             os.makedirs("test_thumbnails", exist_ok=True)
             
-            # Generate thumbnails for each content type
+            # List of content types to generate thumbnails for
             content_types = ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
             
-            for content_type in content_types:
-                output_path = f"test_thumbnails/{content_type}.jpg"
-                
-                # Generate thumbnail
-                thumbnail_path = self.generate_thumbnail(content_type, output_path)
-                
-                if thumbnail_path:
-                    print(colored(f"✓ Generated test thumbnail for {content_type}: {thumbnail_path}", "green"))
-                else:
-                    print(colored(f"✗ Failed to generate test thumbnail for {content_type}", "red"))
+            print(colored("\n=== Generating Test Thumbnails ===", "blue"))
             
-            print(colored("\n=== Test Thumbnails Generation Complete ===", "green"))
+            for content_type in content_types:
+                try:
+                    output_path = f"test_thumbnails/{content_type}.jpg"
+                    result = self.generate_thumbnail(content_type, output_path)
+                    
+                    if result:
+                        print(colored(f"✓ Generated test thumbnail for {content_type}", "green"))
+                    else:
+                        print(colored(f"✗ Failed to generate test thumbnail for {content_type}", "red"))
+                except Exception as e:
+                    print(colored(f"✗ Error generating thumbnail for {content_type}: {str(e)}", "red"))
+            
+            print(colored("=== Test Thumbnail Generation Complete ===", "blue"))
             
         except Exception as e:
-            print(colored(f"Error generating test thumbnails: {str(e)}", "red"))
+            print(colored(f"✗ Error generating test thumbnails: {str(e)}", "red"))
 
 def get_engagement_phrases(content_type):
     """Return engaging transition phrases based on content type"""

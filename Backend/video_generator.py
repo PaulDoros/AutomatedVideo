@@ -29,6 +29,7 @@ from pydub import AudioSegment
 import openai
 import glob
 import traceback
+import logging
 
 # Third-party imports
 from TTS.api import TTS
@@ -181,11 +182,27 @@ async def generate_tts(text, voice, output_path):
 
 class VideoGenerator:
     def __init__(self):
+        """Initialize the video generator"""
+        load_dotenv()
         self.validator = ContentValidator()
         self.script_generator = ScriptGenerator()
+        self.quality_checker = ContentQualityChecker()
+        self.audio_manager = AudioManager()
+        
+        # Directories
         self.output_dir = "output/videos"
         self.temp_dir = "temp"
         self.assets_dir = "assets/videos"
+        
+        # Background music settings
+        self.use_background_music = True
+        self._music_volume = 0.3  # Increased from 0.15 to 0.3 for better audibility
+        self.music_fade_in = 2.0  # Fade in duration in seconds
+        self.music_fade_out = 3.0  # Fade out duration in seconds
+        
+        print(colored(f"Background music: {'Enabled' if self.use_background_music else 'Disabled'}", "blue"))
+        if self.use_background_music:
+            print(colored(f"Music volume: {self._music_volume}", "blue"))
         
         # Hardware optimization settings
         self.n_threads = min(multiprocessing.cpu_count(), 16)  # Use up to 16 CPU threads
@@ -195,9 +212,7 @@ class VideoGenerator:
         for directory in [self.output_dir, self.temp_dir, self.assets_dir]:
             os.makedirs(directory, exist_ok=True)
 
-        load_dotenv()
         self.pexels_api_key = os.getenv('PEXELS_API_KEY')
-        self.content_checker = ContentQualityChecker()
 
         # Create necessary directories
         self.dirs = {
@@ -218,11 +233,11 @@ class VideoGenerator:
         
         self._create_directories()
 
-        # Initialize audio manager for voice selection
-        self.audio_manager = AudioManager()
-        
         # Flag to use Coqui TTS instead of OpenAI TTS
         self.use_coqui_tts = True
+
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
 
     def _create_directories(self):
         """Create all necessary directories"""
@@ -327,7 +342,7 @@ class VideoGenerator:
         
         return os.path.join(music_dir, random.choice(music_files))
 
-    async def create_video(self, script_file, channel_type):
+    async def create_video(self, script_file, channel_type, output_path=None):
         """Create a video from a script file"""
         try:
             print(colored("\n=== Video Generation Started ===", "blue"))
@@ -349,32 +364,39 @@ class VideoGenerator:
             voice = self.get_voice_for_channel(channel_type)
             print(colored(f"Selected voice: {voice}", "green"))
             
+            # Get background music if enabled
+            background_music = None
+            if self.use_background_music:
+                background_music = self.get_background_music(channel_type)
+                if background_music:
+                    print(colored(f"Selected background music for {channel_type}", "green"))
+            
             # Generate TTS audio
             tts_path = await self._generate_tts(script, channel_type)
             if not tts_path:
                 print(colored("Failed to generate TTS audio", "red"))
-                return None
+                return False
                 
             # Generate subtitles
             subtitle_path = await self._generate_subtitles(script, tts_path, channel_type)
             if not subtitle_path:
                 print(colored("Failed to generate subtitles", "red"))
-                return None
+                return False
                 
             # Process background videos
             background_videos = await self._process_background_videos(channel_type, script)
             if not background_videos:
                 print(colored("Failed to process background videos", "red"))
-                return None
+                return False
                 
             # Generate video
-            output_path = await self._generate_video(tts_path, subtitle_path, background_videos, channel_type)
-            if not output_path:
+            video_path = await self._generate_video(tts_path, subtitle_path, background_videos, channel_type, output_path)
+            if not video_path:
                 print(colored("Failed to generate video", "red"))
-                return None
+                return False
                 
             # Clean up temporary files
-            self.cleanup_temp_files()
+            self._cleanup_temp_files()
             
             # Clean up video library to prevent excessive accumulation
             # Only keep 20 videos per channel, and always keep videos newer than 30 days
@@ -382,12 +404,12 @@ class VideoGenerator:
             
             print(colored("\n=== Video Generation Complete ===", "blue"))
             
-            return output_path
+            return True
             
         except Exception as e:
             print(colored(f"Error creating video: {str(e)}", "red"))
             traceback.print_exc()
-            return None
+            return False
 
     async def _generate_tts(self, script, channel_type):
         """Generate TTS using either Coqui TTS or OpenAI's voice"""
@@ -1208,7 +1230,7 @@ class VideoGenerator:
         
         return sections
 
-    def cleanup_temp_files(self):
+    def _cleanup_temp_files(self):
         """Clean up temporary files after video generation"""
         try:
             # Clean up temporary files
@@ -1458,55 +1480,47 @@ class VideoGenerator:
             # Clean up temporary files if needed
             pass
 
-    async def _generate_video(self, tts_path, subtitles_path, background_videos, channel_type):
-        """Generate the final video with audio and subtitles"""
+    async def _generate_video(self, tts_path, subtitles_path, background_videos, channel_type, custom_output_path=None):
+        """Generate a video with the given TTS audio and subtitles"""
         try:
-            # Trim the end of the audio to remove strange sounds (0.3 seconds from the end)
-            # This helps prevent the audio looping issue
-            print(colored("Trimming 0.3 seconds from the end of audio to remove artifacts and prevent looping", "blue"))
-            original_audio = AudioFileClip(tts_path)
+            # Create output directory if it doesn't exist
+            output_dir = os.path.join("output", "videos", channel_type)
+            os.makedirs(output_dir, exist_ok=True)
             
-            # Ensure we don't trim too much if the audio is short
-            trim_amount = min(0.3, original_audio.duration * 0.02)  # Either 0.3s or 2% of duration, whichever is smaller
-            trimmed_audio = original_audio.subclip(0, original_audio.duration - trim_amount)
+            # Generate a unique filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_filename = f"{channel_type}_{timestamp}.mp4"
+            output_path = os.path.join(output_dir, output_filename)
             
-            # Add 1-second silence at the beginning of the audio to match subtitle delay
-            print(colored("Adding 1-second silence at the beginning of audio to match subtitle delay", "blue"))
+            # Use custom output path if provided
+            if custom_output_path:
+                output_path = custom_output_path
             
-            # Create 1 second of silence with the same parameters as the original audio
-            silence_duration = 1.0
-            silence = AudioClip(lambda t: 0, duration=silence_duration)
-            
-            # Add a small silence at the end to prevent audio loop issues
-            end_silence = AudioClip(lambda t: 0, duration=0.5)
-            
-            # Concatenate silence at beginning, trimmed audio, and silence at end
-            delayed_audio = concatenate_audioclips([silence, trimmed_audio, end_silence])
-            
-            # Save the delayed audio to a temporary file
-            delayed_audio_path = f"temp/tts/{channel_type}_delayed.mp3"
-            delayed_audio.write_audiofile(delayed_audio_path)
-            
-            # Close the audio clips to free resources
-            original_audio.close()
-            trimmed_audio.close()
-            delayed_audio.close()
-            
-            # Use the delayed audio for the rest of the process
-            tts_path = delayed_audio_path
-                
-            # Get audio duration for video length calculation
-            audio_clip = AudioFileClip(tts_path)
-            audio_duration = audio_clip.duration
-            audio_clip.close()
+            # Get audio duration
+            audio = AudioFileClip(tts_path)
+            audio_duration = audio.duration
+            audio.close()
             
             print(colored(f"Original audio duration: {audio_duration:.2f}s", "blue"))
             
-            # Calculate target duration with padding
+            # Calculate video duration with padding
             start_padding = 1.0  # 1 second at start (already added to audio)
             end_padding = 3.0    # 3 seconds at end (increased from 2 to 3 seconds)
             target_duration = audio_duration + end_padding  # Start padding already included in audio
             print(colored(f"Video duration: {target_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)", "blue"))
+            
+            # Find the script path based on the TTS path
+            # The script is typically stored with the same base name as the TTS file but with .txt extension
+            script_path = None
+            if tts_path:
+                possible_script_path = tts_path.replace('.mp3', '.txt')
+                if os.path.exists(possible_script_path):
+                    script_path = possible_script_path
+                else:
+                    # Try looking in the temp/tts directory for a script with the channel name
+                    possible_script_path = os.path.join('temp', 'tts', f"{channel_type}.txt")
+                    if os.path.exists(possible_script_path):
+                        script_path = possible_script_path
             
             # Generate video
             from video import generate_video
@@ -1515,7 +1529,12 @@ class VideoGenerator:
                 audio_path=tts_path,
                 subtitles_path=subtitles_path,
                 content_type=channel_type,
-                target_duration=target_duration
+                target_duration=target_duration,
+                use_background_music=self.use_background_music,
+                music_volume=self._music_volume,
+                music_fade_in=self.music_fade_in,
+                music_fade_out=self.music_fade_out,
+                script_path=script_path
             )
             
             if not video:
@@ -1523,9 +1542,11 @@ class VideoGenerator:
                 return None
                 
             # Write final video with specific parameters to prevent black frames
-            temp_video_path = "temp/temp_video_no_audio.mp4"
-            temp_audio_path = "temp/temp_audio.mp3"
-            output_path = "temp_output.mp4"
+            temp_video_path = f"{output_dir.replace('/videos', '')}/temp_video_no_audio.mp4"
+            temp_audio_path = f"{output_dir.replace('/videos', '')}/temp_audio.mp3"
+            
+            # Use custom output path if provided, otherwise use default
+            output_path = custom_output_path if custom_output_path else "temp_output.mp4"
             
             print(colored(f"\n=== 🎥 Rendering Final Video 🎥 ===", "blue"))
             print(colored(f"ℹ️ Output path: {output_path}", "cyan"))
@@ -1536,18 +1557,46 @@ class VideoGenerator:
             
             # Step 1: Extract the audio - handle both simple AudioFileClip and CompositeAudioClip
             if hasattr(video, 'audio') and video.audio is not None:
-                # Check if it's a CompositeAudioClip (which doesn't have fps)
-                if isinstance(video.audio, CompositeAudioClip):
-                    # Create a new audio file directly from the source
+                try:
+                    # Check if it's a CompositeAudioClip (which doesn't have fps)
+                    if isinstance(video.audio, CompositeAudioClip):
+                        # CompositeAudioClip doesn't have fps, so we need to set it
+                        # Get fps from the first clip in the composite
+                        if hasattr(video.audio.clips[0], 'fps') and video.audio.clips[0].fps:
+                            # Use the fps from the first clip
+                            fps = video.audio.clips[0].fps
+                            # Create a new audio file with the same content but with fps
+                            temp_mixed_path = f"{self.temp_dir}/temp_mixed_{uuid.uuid4()}.mp3"
+                            video.audio.write_audiofile(temp_mixed_path, fps=44100)
+                            # Now load it as a regular AudioFileClip which has fps
+                            regular_audio = AudioFileClip(temp_mixed_path)
+                            regular_audio.write_audiofile(temp_audio_path)
+                            regular_audio.close()
+                            # Clean up
+                            if os.path.exists(temp_mixed_path):
+                                os.remove(temp_mixed_path)
+                        else:
+                            # Fallback to using the original TTS file
+                            print(colored("⚠️ Warning: Could not determine fps for composite audio, using original TTS", "yellow"))
+                            source_audio = AudioFileClip(tts_path)
+                            source_audio.write_audiofile(temp_audio_path)
+                            source_audio.close()
+                    else:
+                        # It's a regular AudioFileClip
+                        video.audio.write_audiofile(temp_audio_path)
+                except Exception as e:
+                    print(colored(f"Error extracting audio: {str(e)}", "red"))
+                    print(colored("Falling back to original TTS audio", "yellow"))
+                    # Fallback to using the original TTS file
                     source_audio = AudioFileClip(tts_path)
                     source_audio.write_audiofile(temp_audio_path)
                     source_audio.close()
-                else:
-                    # It's a regular AudioFileClip
-                    video.audio.write_audiofile(temp_audio_path)
             else:
                 # If no audio in video, use the original TTS file
-                shutil.copy2(tts_path, temp_audio_path)
+                source_audio = AudioFileClip(tts_path)
+                source_audio.write_audiofile(temp_audio_path)
+                source_audio.close()
+                print(colored("⚠️ Warning: No audio found in video, using original TTS without music", "yellow"))
             
             # Step 2: Write the video without audio
             video.without_audio().write_videofile(
@@ -1585,74 +1634,43 @@ class VideoGenerator:
                     os.remove(temp_video_path)
                 if os.path.exists(temp_audio_path):
                     os.remove(temp_audio_path)
+                print(colored("✓ Temporary files cleaned up", "green"))
             except Exception as e:
-                print(colored(f"Warning: Error during cleanup: {str(e)}", "yellow"))
+                print(colored(f"Warning: Error cleaning up: {str(e)}", "yellow"))
             
-            # Create timestamped output path
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            final_output_path = f"output/videos/{channel_type}_{timestamp}.mp4"
-            
-            # Create latest output path
-            latest_path = f"output/videos/{channel_type}_latest.mp4"
-            
-            # Copy to output directory
-            os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
-            shutil.copy2(output_path, final_output_path)
-            shutil.copy2(output_path, latest_path)
-            
-            return final_output_path
+            return output_path
             
         except Exception as e:
             print(colored(f"Error generating video: {str(e)}", "red"))
             traceback.print_exc()
             return None
 
-def generate_video_for_channel(channel, topic, hashtags):
-    """Generate and upload a video for a specific channel"""
-    try:
-        # Video generation parameters
-        params = {
-            'videoSubject': topic,
-            'aiModel': 'gpt-4',  # or your preferred model
-            'voice': 'en_us_001',
-            'paragraphNumber': 1,
-            'automateYoutubeUpload': True,
-            'automateTikTokUpload': True,
-            'youtubeAccount': channel,
-            'tiktokAccount': channel,
-            'useMusic': True,
-            'threads': 2
-        }
+    async def generate_video(self, channel, script_file):
+        """Generate a video for the given channel using the script file"""
+        try:
+            # Use the existing create_video method
+            output_path = f"output/videos/{channel}_latest.mp4"
+            return await self.create_video(script_file, channel, output_path)
+        except Exception as e:
+            print(colored(f"Error in generate_video: {str(e)}", "red"))
+            traceback.print_exc()
+            return False
+
+    @property
+    def music_volume(self):
+        """Get the current music volume setting"""
+        return self._music_volume
         
-        # Generate video
-        video_path = generate_video(params)
-        
-        if video_path:
-            # Upload to YouTube
-            youtube_response = upload_video(
-                video_path=video_path,
-                title=f"{topic} #{' #'.join(hashtags)}",
-                description=f"Auto-generated content about {topic}\n\n#{' #'.join(hashtags)}",
-                category="28",  # Tech
-                keywords=",".join(hashtags),
-                privacy_status="public",
-                channel=channel
-            )
-            
-            # Upload to TikTok
-            tiktok_session = os.getenv(f"TIKTOK_SESSION_ID_{channel.upper()}")
-            if tiktok_session:
-                uploader = TikTokUploader(tiktok_session)
-                tiktok_response = uploader.upload_video(
-                    video_path=video_path,
-                    title=f"{topic} #{' #'.join(hashtags)}"[:150],
-                    tags=hashtags
-                )
-            
-            print(colored(f"[+] Successfully generated and uploaded video for {channel}: {topic}", "green"))
-            return True
-            
-    except Exception as e:
-        print(colored(f"[-] Error generating video for {channel}: {str(e)}", "red"))
-        return False
+    @music_volume.setter
+    def music_volume(self, value):
+        """Set the music volume, ensuring it's within valid range"""
+        if not isinstance(value, (int, float)):
+            self.logger.warning(f"Invalid music volume type: {type(value)}. Using default 0.3")
+            self._music_volume = 0.3
+        elif value < 0.0 or value > 1.0:
+            self.logger.warning(f"Music volume {value} out of range (0.0-1.0). Clamping to valid range.")
+            self._music_volume = max(0.0, min(1.0, value))
+        else:
+            self._music_volume = value
+            print(colored(f"Music volume set to {self._music_volume}", "cyan"))
 

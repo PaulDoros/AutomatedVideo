@@ -1,27 +1,34 @@
 # Core dependencies
-numpy==1.24.3
-requests==2.31.0
-python-dotenv==1.0.0
-moviepy==1.0.3
-termcolor==2.3.0
-Pillow==10.0.0
-openai==1.3.0
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=1.0.0
+openai>=1.0.0
+python-dotenv>=1.0.0
+termcolor>=2.3.0
+asyncio>=3.4.3
+pytz>=2023.3
 
-# Audio processing
-pydub==0.25.1
-TTS==0.8.0
-torch==2.1.0
-torchaudio==2.1.0
-torchvision==0.16.0
+# Database and data analysis
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+scikit-learn>=1.2.0
 
-# Subtitle handling
-pysrt==1.1.2
-webvtt-py==0.4.6
-chardet==5.2.0
+# NLP and text processing
+nltk>=3.8.0
+tqdm>=4.65.0
 
-# Video processing
-pytube==15.0.0
-g4f==0.1.7.9
+# Image and video processing
+Pillow>=10.0.0
+moviepy>=1.0.3
+ffmpeg-python>=0.2.0
+imageio>=2.30.0
+imageio-ffmpeg>=0.4.8
 
-# Additional requirements
-scipy>=1.10.0
+# Web and API
+requests>=2.30.0
+aiohttp>=3.8.5
+
+# Testing
+pytest>=7.3.1
+pytest-asyncio>=0.21.0

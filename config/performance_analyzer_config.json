@@ -1,0 +1,57 @@
+{
+  "analysis_window_days": 30,
+  "min_videos_for_analysis": 10,
+  "use_gpt": true,
+  "high_performance_threshold": 0.75,
+  "engagement_score_weights": {
+    "views": 0.3,
+    "likes": 0.3,
+    "comments": 0.2,
+    "watch_time": 0.1,
+    "view_completion_rate": 0.1
+  },
+  "hourly_analysis": {
+    "enabled": true,
+    "min_sample_size": 5,
+    "confidence_threshold": 0.6,
+    "hours_to_recommend": 6
+  },
+  "content_analysis": {
+    "enabled": true,
+    "analyze_titles": true,
+    "analyze_descriptions": true,
+    "analyze_tags": true,
+    "analyze_thumbnails": false,
+    "analyze_duration": true
+  },
+  "report_generation": {
+    "frequency_days": 7,
+    "generate_visualizations": true,
+    "visualization_formats": ["png", "svg"],
+    "save_raw_data": true,
+    "include_recommendations": true
+  },
+  "optimization_settings": {
+    "auto_adjust_posting_times": true,
+    "auto_adjust_content_strategy": true,
+    "learning_rate": 0.2,
+    "min_data_points": 15
+  },
+  "metrics_to_track": [
+    "views",
+    "likes",
+    "comments",
+    "shares",
+    "watch_time",
+    "view_completion_rate",
+    "click_through_rate",
+    "subscriber_conversion"
+  ],
+  "visualization_settings": {
+    "color_scheme": "viridis",
+    "figure_width": 12,
+    "figure_height": 6,
+    "dpi": 100,
+    "include_trend_lines": true
+  }
+} 

@@ -1,0 +1,72 @@
+{
+  "database": {
+    "path": "data/shorts_scheduler.db"
+  },
+  "youtube_api": {
+    "client_secrets_file": "credentials/client_secret.json",
+    "credentials_dir": "credentials",
+    "scopes": [
+      "https://www.googleapis.com/auth/youtube.upload",
+      "https://www.googleapis.com/auth/youtube.readonly"
+    ]
+  },
+  "channels": [
+    {
+      "channel_id": "CHANNEL_ID_1",
+      "name": "Tech Tips Channel",
+      "timezone_offset": 0,
+      "content_type": "tech_humor"
+    },
+    {
+      "channel_id": "CHANNEL_ID_2",
+      "name": "Coding Tutorials",
+      "timezone_offset": -5,
+      "content_type": "coding_tips"
+    },
+    {
+      "channel_id": "CHANNEL_ID_3",
+      "name": "Money & Finance",
+      "timezone_offset": -8,
+      "content_type": "ai_money"
+    },
+    {
+      "channel_id": "CHANNEL_ID_4",
+      "name": "Lifestyle Hacks",
+      "timezone_offset": 1,
+      "content_type": "life_hack"
+    },
+    {
+      "channel_id": "CHANNEL_ID_5",
+      "name": "Food & Recipes",
+      "timezone_offset": 3,
+      "content_type": "quick_meals"
+    }
+  ],
+  "scheduling": {
+    "videos_per_day_per_channel": 6,
+    "upload_interval_hours": 4,
+    "time_zone_optimization": true,
+    "retry_failed_uploads": true,
+    "max_retry_attempts": 3,
+    "retry_delay_minutes": 60
+  },
+  "monitoring": {
+    "check_upload_status_interval_minutes": 30,
+    "fetch_performance_interval_hours": 12,
+    "alert_on_failed_uploads": true,
+    "alert_email": "your-email@example.com"
+  },
+  "content_generation": {
+    "staging_directory": "staging",
+    "temp_directory": "temp",
+    "max_videos_per_batch": 20,
+    "min_topic_gap_days": 60
+  },
+  "performance_analysis": {
+    "analysis_window_days": 30,
+    "generate_weekly_report": true,
+    "report_day": "Monday",
+    "store_reports": true,
+    "optimize_posting_times": true
+  }
+} 

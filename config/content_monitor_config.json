@@ -1,0 +1,45 @@
+{
+  "min_topic_gap_days": 60,
+  "similarity_threshold": 0.7,
+  "update_frequency_hours": 24,
+  "max_videos_to_check": 100,
+  "use_gpt_checking": true,
+  "content_categories": [
+    "tech_humor",
+    "coding_tips",
+    "ai_money",
+    "life_hack",
+    "quick_meals"
+  ],
+  "duplicate_detection": {
+    "tfidf_enabled": true,
+    "gpt_enabled": true,
+    "min_confidence": 0.8,
+    "check_title": true,
+    "check_description": true,
+    "check_tags": true
+  },
+  "content_analysis": {
+    "analyze_engagement": true,
+    "analyze_comments": true,
+    "analyze_title_patterns": true,
+    "analyze_audience_retention": true
+  },
+  "forbidden_topics": [
+    "politics",
+    "religion",
+    "controversial_news",
+    "adult_content"
+  ],
+  "suggestion_settings": {
+    "suggest_variations": true,
+    "max_variations": 3,
+    "use_high_performing_patterns": true
+  },
+  "weekly_reporting": {
+    "generate_report": true,
+    "include_visualizations": true,
+    "send_email_summary": false,
+    "email_recipients": []
+  }
+} 
