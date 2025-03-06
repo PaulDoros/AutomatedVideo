@@ -606,22 +606,42 @@ class MusicProvider:
                     
                     print(colored(f"✓ Using local music: {selected_file}", "green"))
                     return music_path
+                else:
+                    # If all music has been used, try to download new music first
+                    # instead of immediately falling back to default music
+                    print(colored(f"All local music for {channel_type} has been used recently. Downloading new music...", "blue"))
             
-            # If no local music, use default music
-            default_music = self.get_default_music(channel_type)
-            if default_music:
-                print(colored(f"✓ Using default music for {channel_type}", "green"))
-                return default_music
-            
-            # If all fails, try to download from APIs as a last resort
+            # Try to download from APIs to get fresh music
             moods = self.music_moods.get(channel_type, ['background', 'ambient'])
-            mood = random.choice(moods)
+            # Use multiple moods to increase variety
+            selected_moods = random.sample(moods, min(3, len(moods)))
             
-            print(colored(f"Searching for {mood} music for {channel_type}...", "blue"))
-            
-            # Try Freesound first (if API key is available)
-            if self.freesound_client:
-                music_path = await self.get_music_from_freesound(mood, duration)
+            # Try each mood until we find suitable music
+            for mood in selected_moods:
+                print(colored(f"Searching for {mood} music for {channel_type}...", "blue"))
+                
+                # Try Freesound first (if API key is available)
+                if self.freesound_client:
+                    music_path = await self.get_music_from_freesound(mood, duration)
+                    if music_path:
+                        # Copy to channel directory
+                        channel_dir = self.channel_dirs.get(channel_type)
+                        if channel_dir:
+                            new_filename = f"{channel_type}_{uuid.uuid4()}.mp3"
+                            new_path = os.path.join(channel_dir, new_filename)
+                            
+                            # Copy file
+                            with open(music_path, 'rb') as src, open(new_path, 'wb') as dst:
+                                dst.write(src.read())
+                            
+                            # Mark as used
+                            self._save_used_music(channel_type, new_path)
+                            
+                            print(colored(f"✓ Downloaded new music for {channel_type} from Freesound with mood: {mood}", "green"))
+                            return new_path
+                
+                # Try Pixabay next
+                music_path = await self.get_music_from_pixabay(mood, duration)
                 if music_path:
                     # Copy to channel directory
                     channel_dir = self.channel_dirs.get(channel_type)
@@ -636,40 +656,33 @@ class MusicProvider:
                         # Mark as used
                         self._save_used_music(channel_type, new_path)
                         
-                        print(colored(f"✓ Downloaded new music for {channel_type} from Freesound", "green"))
+                        print(colored(f"✓ Downloaded new music for {channel_type} from Pixabay with mood: {mood}", "green"))
                         return new_path
-                    
-                    return music_path
-            
-            # Try Unminus next
-            music_path = await self.get_music_from_unminus(mood)
-            
-            if not music_path:
-                music_path = await self.get_music_from_ncs(mood, duration)
-            
-            if not music_path:
-                # Try Pixabay as last resort
-                music_path = await self.get_music_from_pixabay(mood, duration)
-            
-            # If we found music from APIs, save it
-            if music_path and os.path.exists(music_path):
-                # Copy to channel directory
-                channel_dir = self.channel_dirs.get(channel_type)
-                if channel_dir:
-                    new_filename = f"{channel_type}_{uuid.uuid4()}.mp3"
-                    new_path = os.path.join(channel_dir, new_filename)
-                    
-                    # Copy file
-                    with open(music_path, 'rb') as src, open(new_path, 'wb') as dst:
-                        dst.write(src.read())
-                    
-                    # Mark as used
-                    self._save_used_music(channel_type, new_path)
-                    
-                    print(colored(f"✓ Downloaded new music for {channel_type}", "green"))
-                    return new_path
                 
-                return music_path
+                # Try Unminus
+                music_path = await self.get_music_from_unminus(mood)
+                if music_path:
+                    # Copy to channel directory
+                    channel_dir = self.channel_dirs.get(channel_type)
+                    if channel_dir:
+                        new_filename = f"{channel_type}_{uuid.uuid4()}.mp3"
+                        new_path = os.path.join(channel_dir, new_filename)
+                        
+                        # Copy file
+                        with open(music_path, 'rb') as src, open(new_path, 'wb') as dst:
+                            dst.write(src.read())
+                        
+                        # Mark as used
+                        self._save_used_music(channel_type, new_path)
+                        
+                        print(colored(f"✓ Downloaded new music for {channel_type} from Unminus with mood: {mood}", "green"))
+                        return new_path
+            
+            # If all API attempts fail, use default music as last resort
+            default_music = self.get_default_music(channel_type)
+            if default_music:
+                print(colored(f"✓ Using default music for {channel_type} (after trying to download new music)", "yellow"))
+                return default_music
             
             # If all fails, return None
             print(colored(f"Could not find suitable music for {channel_type}", "yellow"))
