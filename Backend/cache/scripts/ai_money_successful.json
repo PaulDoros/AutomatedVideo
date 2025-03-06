@@ -1,23 +1,5 @@
 [
   {
-    "script": "1. **Hook:** Want to turn words into cash, instantly?\n2. **Problem/Setup:** Struggling to create content that sells or engages?\n3. **Solution/Development:** Dive into the world of AI copywriting tools like Jasper or Copy.ai. These tools help you generate high-converting sales copy, compelling blog posts, or captivating social media content in seconds. Just input your topic, choose your tone, and watch as AI crafts content that fits your needs.\n4. **Result/Punchline:** Not only does this save you hours of brainstorming and drafting, but it also optimizes your content for SEO, boosting your online visibility and earnings.\n5. **Call to action:** Start your free trial now and watch your content (and revenue) soar!\n\n---\n**",
-    "metrics": {
-      "duration": 46.400000000000006,
-      "words": 116,
-      "lines": 7
-    },
-    "timestamp": 1741177740.9068332
-  },
-  {
-    "script": "1. **Hook:** Want to turn your smartphone into a cash machine? \ud83d\udcf1\ud83d\udcb0\n   \n2. **Problem/Setup:** Struggling to find a side hustle that fits your busy schedule?\n\n3. **Solution/Development:** Enter \"Snapwire\", an AI-powered platform that pays you for your smartphone photos! Just snap, upload, and sell your images to businesses worldwide. With AI curation, your photos are matched to buyers instantly, making earning passive income a snap!\n\n4. **Result/Punchline:** No photography skills? No problem! Snapwire's AI suggests improvements, making every shot a potential moneymaker.\n\n5. **Call to action:** So, grab your phone, start snapping, and watch your wallet grow. Dive into Snapwire today!\n\n---\n\n**",
-    "metrics": {
-      "duration": 42.0,
-      "words": 105,
-      "lines": 7
-    },
-    "timestamp": 1741178233.6800323
-  },
-  {
     "script": "1. Hook: Ever dreamt of earning while you sleep? AI's got you covered!\n2. Problem/Setup: Struggling to find a side hustle that doesn't eat up your time?\n3. Solution/Development: Introducing ChatGPT integration services! Businesses are on the hunt for tools that automate customer service, but they need experts. With basic coding skills and OpenAI's API, you can create custom chatbots tailored for businesses - cafes, online stores, you name it. Charge a setup fee plus monthly maintenance.\n4. Result/Punchline: You set it up once and watch the passive income flow in as businesses keep their customers engaged 24/7.\n5. Call to action: Time to turn your coding hobby into a cash-making machine with AI!",
     "metrics": {
       "duration": 48.400000000000006,
@@ -178,5 +160,23 @@
       "lines": 1
     },
     "timestamp": 1741249068.6488762
+  },
+  {
+    "script": "Did you know your smartphone photos can make you money right now? Yes, even those sunset pics! Here\u2019s how: AI-powered stock photo websites like Shutterstock have a high demand for authentic images. Snap, upload, and earn \u2013 it\u2019s that simple.\n\nFirst, quality over quantity. Use your phone\u2019s highest resolution setting. Next, uniqueness sells. Capture moments that stand out. Finally, keywords are king. Tag your photos with relevant, searchable terms to boost visibility.\n\nImagine passive income flowing in as designers and marketers choose YOUR photos for their projects. Start snapping, uploading, and watch your side hustle bloom. Ready to turn your gallery into gold?\n\nNow, go capture the world!\n\n---",
+    "metrics": {
+      "duration": 44.400000000000006,
+      "words": 111,
+      "lines": 5
+    },
+    "timestamp": 1741249771.5325713
+  },
+  {
+    "script": "Ever wonder how your love for gaming can actually fill your pockets? Here's a secret: AI in the gaming world isn't just for play; it's a goldmine waiting for you. \n\nImagine creating a game without a single line of code. Sounds like a dream, right? With AI platforms like GPT-3 and Unity's ML-Agents, this isn't just possible; it's happening. \n\nHere's the scoop: Use GPT-3 to generate game narratives and dialogues. Then, integrate Unity's ML-Agents for intelligent, learning game characters. No coding, just creativity. \n\nAnd the best part? These AI-driven games can be sold on platforms like Steam or the App Store, turning your passion into a lucrative side hustle. \n\nSo, grab your creative hat, dive into AI game development, and let your gaming fantasies earn for you. Time to make your gaming passion pay!\n\n---",
+    "metrics": {
+      "duration": 58.800000000000004,
+      "words": 147,
+      "lines": 6
+    },
+    "timestamp": 1741250313.1104803
   }
 ]
