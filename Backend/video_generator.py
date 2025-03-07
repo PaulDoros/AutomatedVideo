@@ -4,7 +4,6 @@ from main import generate_video
 from youtube import upload_video
 from tiktok_upload import TikTokUploader
 import os
-import subprocess
 from termcolor import colored
 from content_validator import ContentValidator, ScriptGenerator
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips, AudioClip, CompositeAudioClip
@@ -1393,7 +1392,9 @@ class VideoGenerator:
                 ffmpeg_params=["-vf", "format=yuv420p"]
             )
             
-            # Step 3: Combine video and audio using ffmpeg
+            # Step 3: Combine video and audio using ffmpeg directly
+            # IMPORTANT: Removed the -shortest flag to ensure the full video duration is preserved
+            import subprocess
             cmd = [
                 "ffmpeg", "-y",
                 "-i", temp_video_path,
@@ -1402,12 +1403,13 @@ class VideoGenerator:
                 "-c:a", "aac",
                 "-map", "0:v:0",  # Use the entire video track
                 "-map", "1:a:0",  # Use the entire audio track
+                "-af", "afade=t=out:st=" + str(audio_duration - 0.5) + ":d=0.5",  # Add fade out to audio
                 temp_output_path
             ]
             subprocess.run(cmd, check=True)
             
-            # Step 4: Instead of trimming, just copy the file to the final output
-            print(colored("⏳ Finalizing video...", "cyan"))
+            # Step 4: Trim the last second from the video
+            print(colored("⏳ Trimming the last second from the video...", "cyan"))
             
             # Get the duration of the generated video
             probe_cmd = [
@@ -1423,23 +1425,36 @@ class VideoGenerator:
                 duration_output = subprocess.check_output(probe_cmd, universal_newlines=True).strip()
                 video_duration = float(duration_output)
                 
-                # Simply copy the file instead of trimming
-                shutil.copy(temp_output_path, final_output_path)
-                print(colored(f"✅ Successfully created video with duration {video_duration:.2f}s", "green"))
+                # Calculate the new duration (trim the last second)
+                new_duration = max(1.0, video_duration - 1.0)
+                
+                # Trim the video using ffmpeg
+                trim_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", temp_output_path,
+                    "-t", str(new_duration),
+                    "-c:v", "copy",
+                    "-c:a", "copy",
+                    final_output_path
+                ]
+                
+                subprocess.run(trim_cmd, check=True)
+                print(colored(f"✅ Successfully trimmed video from {video_duration:.2f}s to {new_duration:.2f}s", "green"))
                 
                 # Remove the temporary output file
                 if os.path.exists(temp_output_path):
                     os.remove(temp_output_path)
                 
-            except Exception as copy_error:
-                print(colored(f"⚠️ Warning: Error copying video: {str(copy_error)}", "yellow"))
-                print(colored("Using the temporary video as final output", "yellow"))
-                # If copying fails, just use the temp file as the final output
-                if os.path.exists(temp_output_path) and not os.path.exists(final_output_path):
-                    try:
-                        shutil.copy(temp_output_path, final_output_path)
-                    except Exception:
-                        pass
+            except Exception as trim_error:
+                print(colored(f"⚠️ Warning: Error trimming video: {str(trim_error)}", "yellow"))
+                print(colored("Using the original video without trimming", "yellow"))
+                
+                # If trimming fails, just use the original output
+                if os.path.exists(temp_output_path):
+                    # Rename the temp file to the final output path
+                    if os.path.exists(final_output_path):
+                        os.remove(final_output_path)
+                    os.rename(temp_output_path, final_output_path)
             
             elapsed_time = time.time() - start_time
             print(colored(f"⏱️ Video rendered in {elapsed_time:.1f} seconds", "cyan"))

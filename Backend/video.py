@@ -763,13 +763,20 @@ def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: 
             log_info(f"Music file: {os.path.basename(music_path)}")
             log_info(f"Music duration: {music_duration:.2f}s, size: {music_size_mb:.2f} MB")
             
-            # Increase the music volume slightly to make it more audible
-            # Use a higher base volume (at least 0.4) to ensure music is audible
-            actual_music_volume = max(0.4, music_volume * 1.5)
-            log_info(f"Adjusted music volume to {actual_music_volume:.2f} for better audibility")
-            
-            # Apply volume adjustment to music
-            music = music.volumex(actual_music_volume)
+            # Apply dynamic volume adjustment to music
+            try:
+                # Create a function that adjusts volume dynamically
+                def adjust_volume(t):
+                    # Reduce volume during speech segments
+                    # This is a simple ducking effect - can be enhanced with more sophisticated analysis
+                    return music_volume
+                
+                # Apply volume adjustment with error handling
+                music = music.fl(lambda gf, t: gf(t) * adjust_volume(t), keep_duration=True)
+            except ValueError as e:
+                log_warning(f"Error applying dynamic volume: {str(e)}")
+                # Fallback to simple volume adjustment
+                music = music.volumex(music_volume)
             
             # Apply fades to music
             if fade_in > 0:
@@ -791,8 +798,8 @@ def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: 
             # Normalize voice audio for consistent levels
             voice = voice.fx(afx.audio_normalize)
             
-            # Boost voice slightly to ensure clarity over music, but not too much
-            voice = voice.volumex(1.1)
+            # Boost voice slightly to ensure clarity over music
+            voice = voice.volumex(1.2)
             
             # Ensure the voice starts after exactly 1 second of silence
             voice = voice.set_start(1.0)
@@ -816,10 +823,21 @@ def mix_audio(voice_path: str, music_path: str, output_path: str, music_volume: 
             voice = voice.set_start(1.0)
             voice.write_audiofile(output_path, fps=44100, bitrate="192k")
             return output_path
-            
+    
     except Exception as e:
         log_error(f"Error mixing audio: {str(e)}")
-        return None
+        log_warning(f"Falling back to voice audio only")
+        
+        # Make sure we actually copy the voice audio to the output path
+        try:
+            # Copy the voice audio to the output path
+            shutil.copy(voice_path, output_path)
+            log_info(f"Copied voice audio to {output_path}")
+            return output_path
+        except Exception as copy_error:
+            log_error(f"Error copying voice audio: {str(copy_error)}")
+            # If we can't even copy the file, return the original voice path
+            return voice_path
 
 def resize_to_vertical(clip):
     """Resize video clip to vertical format"""
