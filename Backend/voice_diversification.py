@@ -17,59 +17,15 @@ FEMALE_VOICE_KEYWORDS = ['daisy', 'sofia', 'alma', 'gracie', 'alison', 'tammy', 
                          'nova', 'maja', 'uta', 'lidiya', 'chandra', 'szofi', 'camilla', 'lilya', 
                          'zofija', 'narelle', 'barbora', 'alexandra', 'rosemary']
 
-# English-only voice lists - these are verified English voices
-ENGLISH_MALE_VOICES = [
-    "Andrew", "Damien", "Craig", "Aaron", "Royston", "Zacharie", "Viktor", 
-    "Daniel", "James", "Matthew", "David", "John", "Robert", "Michael", 
-    "William", "Thomas", "Christopher", "Joseph", "Richard", "Charles"
-]
-
-ENGLISH_FEMALE_VOICES = [
-    "Daisy", "Sofia", "Alma", "Gracie", "Alison", "Tammy", "Brenda", 
-    "Nova", "Emma", "Olivia", "Charlotte", "Amelia", "Sophia", "Isabella", 
-    "Ava", "Mia", "Evelyn", "Luna", "Harper", "Elizabeth"
-]
-
-# Top quality voices for each content type
-BEST_TECH_HUMOR_VOICES = [
-    "Damien",  # Energetic male voice
-    "Viktor",  # Clear and engaging
-    "Nova",    # Enthusiastic female voice
-    "Daisy",   # Clear and professional
-    "Aaron"    # Friendly and approachable
-]
-
-BEST_AI_MONEY_VOICES = [
-    "Craig",   # Professional male voice
-    "Royston", # Authoritative
-    "Alison",  # Professional female voice
-    "Sofia",   # Clear and confident
-    "Andrew"   # Trustworthy
-]
-
-BEST_BABY_TIPS_VOICES = [
-    "Gracie",  # Warm female voice
-    "Alma",    # Gentle and nurturing
-    "Tammy",   # Friendly and approachable
-    "Brenda",  # Reassuring
-    "Aaron"    # Calm male voice
-]
-
-BEST_QUICK_MEALS_VOICES = [
-    "Daisy",   # Enthusiastic female voice
-    "Nova",    # Energetic
-    "Sofia",   # Clear and engaging
-    "Damien",  # Energetic male voice
-    "Viktor"   # Friendly and approachable
-]
-
-BEST_FITNESS_MOTIVATION_VOICES = [
-    "Damien",  # Energetic male voice
-    "Craig",   # Authoritative
-    "Viktor",  # Motivational
-    "Nova",    # Energetic female voice
-    "Daisy"    # Enthusiastic
-]
+# Sample texts for testing
+SAMPLE_TEXTS = {
+    "intro": "Welcome to our channel! Today we're going to explore an exciting topic that will change the way you think about technology.",
+    "tutorial": "In this tutorial, I'll show you step by step how to implement this solution. It's easier than you might think.",
+    "explanation": "Let me explain how this works. The concept is based on fundamental principles that have been proven effective.",
+    "conclusion": "Thanks for watching! If you found this video helpful, don't forget to like and subscribe for more content like this.",
+    "joke": "Why don't scientists trust atoms? Because they make up everything! And speaking of making things up, my code works on the first try.",
+    "fact": "Did you know that artificial intelligence is transforming industries across the globe? The potential applications are virtually limitless."
+}
 
 # Emotions for testing
 EMOTIONS = [
@@ -88,15 +44,16 @@ CONTENT_EMOTIONS = {
     "default": ["neutral", "friendly", "professional"]
 }
 
-# Sample texts for testing
-SAMPLE_TEXTS = {
-    "intro": "Welcome to our channel! Today we're going to explore an exciting topic that will change the way you think about technology.",
-    "tutorial": "In this tutorial, I'll show you step by step how to implement this solution. It's easier than you might think.",
-    "explanation": "Let me explain how this works. The concept is based on fundamental principles that have been proven effective.",
-    "conclusion": "Thanks for watching! If you found this video helpful, don't forget to like and subscribe for more content like this.",
-    "joke": "Why don't scientists trust atoms? Because they make up everything! And speaking of making things up, my code works on the first try.",
-    "fact": "Did you know that artificial intelligence is transforming industries across the globe? The potential applications are virtually limitless."
-}
+# Best voices for tech humor content - these are the most energetic and clear voices
+BEST_TECH_HUMOR_VOICES = [
+    "Damien Black",  # Energetic male voice
+    "Viktor Yates",  # Clear and engaging
+    "Andrew Childs", # Good for jokes
+    "Royston Elliot", # Enthusiastic
+    "Ilkin Urbano",  # Energetic and clear
+    "Zacharie Aston", # Good for tech content
+    "Wulf Warrick"   # Engaging and clear
+]
 
 class VoiceDiversification:
     """Voice diversification system for video voiceovers"""
@@ -107,62 +64,37 @@ class VoiceDiversification:
         self.male_voices = []
         self.female_voices = []
         self.all_voices = []
-        self.english_voices = []  # New list for English-only voices
         self.has_speaker_support = hasattr(self.api, 'speakers') and self.api.speakers
         self._classify_voices()
         
     def _classify_voices(self):
-        """Classify available voices by gender and language"""
-        try:
-            # Get all available voices from the API
-            voices_data = self.api.get_available_voices()
+        """Classify available voices into male and female categories"""
+        if not self.has_speaker_support:
+            print(colored("Current TTS model doesn't support multiple speakers", "yellow"))
+            print(colored("Using default voice with emotion variations", "yellow"))
+            return
             
-            if voices_data and 'speakers' in voices_data:
-                self.all_voices = voices_data['speakers']
-                
-                # Filter for English voices only
-                self.english_voices = [
-                    voice for voice in self.all_voices 
-                    if any(eng_voice.lower() in voice.lower() for eng_voice in ENGLISH_MALE_VOICES + ENGLISH_FEMALE_VOICES)
-                ]
-                
-                # If we have English voices, use only those
-                if self.english_voices:
-                    self.all_voices = self.english_voices
-                    print(colored(f"Using {len(self.english_voices)} English voices only", "green"))
-                
-                # Classify by gender
-                self.male_voices = [
-                    voice for voice in self.all_voices 
-                    if any(male.lower() in voice.lower() for male in ENGLISH_MALE_VOICES)
-                ]
-                
-                self.female_voices = [
-                    voice for voice in self.all_voices 
-                    if any(female.lower() in voice.lower() for female in ENGLISH_FEMALE_VOICES)
-                ]
-                
-                print(colored(f"Classified {len(self.male_voices)} male voices and {len(self.female_voices)} female voices", "blue"))
-            else:
-                print(colored("No voices available from the API", "yellow"))
-                
-        except Exception as e:
-            print(colored(f"Error classifying voices: {str(e)}", "red"))
-            
+        # Classify voices
+        self.male_voices = [s for s in self.api.speakers if any(name in s.lower() for name in MALE_VOICE_KEYWORDS)]
+        self.female_voices = [s for s in self.api.speakers if any(name in s.lower() for name in FEMALE_VOICE_KEYWORDS)]
+        
+        # Add remaining voices to all_voices
+        self.all_voices = self.api.speakers.copy()
+        
+        print(colored(f"Classified {len(self.male_voices)} male voices and {len(self.female_voices)} female voices", "green"))
+        print(colored(f"Total available voices: {len(self.all_voices)}", "green"))
+        
     def get_random_voice(self, gender: Optional[str] = None) -> str:
         """Get a random voice based on gender preference"""
-        try:
-            if gender == 'male' and self.male_voices:
-                return random.choice(self.male_voices)
-            elif gender == 'female' and self.female_voices:
-                return random.choice(self.female_voices)
-            elif self.all_voices:
-                return random.choice(self.all_voices)
-            else:
-                return "default"
-        except Exception as e:
-            print(colored(f"Error getting random voice: {str(e)}", "red"))
-            return "default"
+        if not self.has_speaker_support:
+            return None
+            
+        if gender == "male" and self.male_voices:
+            return random.choice(self.male_voices)
+        elif gender == "female" and self.female_voices:
+            return random.choice(self.female_voices)
+        else:
+            return random.choice(self.all_voices) if self.all_voices else None
             
     def get_random_emotion(self) -> str:
         """Get a random emotion"""
@@ -316,30 +248,17 @@ class VoiceDiversification:
     def select_voice(self, channel_type, gender=None):
         """Select a voice based on channel type and gender preference with consistent results"""
         try:
-            # Get the best voices for this channel type
-            best_voices = []
-            
+            # For tech_humor, use only the best voices
             if channel_type == 'tech_humor':
-                best_voices = [v for v in self.all_voices if any(best.lower() in v.lower() for best in BEST_TECH_HUMOR_VOICES)]
-            elif channel_type == 'ai_money':
-                best_voices = [v for v in self.all_voices if any(best.lower() in v.lower() for best in BEST_AI_MONEY_VOICES)]
-            elif channel_type == 'baby_tips':
-                best_voices = [v for v in self.all_voices if any(best.lower() in v.lower() for best in BEST_BABY_TIPS_VOICES)]
-            elif channel_type == 'quick_meals':
-                best_voices = [v for v in self.all_voices if any(best.lower() in v.lower() for best in BEST_QUICK_MEALS_VOICES)]
-            elif channel_type == 'fitness_motivation':
-                best_voices = [v for v in self.all_voices if any(best.lower() in v.lower() for best in BEST_FITNESS_MOTIVATION_VOICES)]
-            
-            # If we found best voices for this channel, use one of them
-            if best_voices:
-                # Use a deterministic approach to select a voice
-                index = hash(channel_type) % len(best_voices)
-                selected_voice = best_voices[index]
-                print(colored(f"Selected optimal voice for {channel_type}: {selected_voice}", "green"))
-                return selected_voice
-                
+                # Filter available voices to only include the best ones for tech humor
+                best_voices = [v for v in self.all_voices if any(best in v for best in BEST_TECH_HUMOR_VOICES)]
+                if best_voices:
+                    # Return a random voice from the best voices
+                    return random.choice(best_voices)
+                # If no best voices are available, fall back to male voices
+                gender = 'male'
             # Determine gender preference based on content type if not specified
-            if gender is None:
+            elif gender is None:
                 if channel_type == 'baby_tips':
                     gender = 'female'  # Prefer female voices for baby tips
                 elif channel_type == 'fitness_motivation':
@@ -350,6 +269,7 @@ class VoiceDiversification:
                     gender = 'male'    # Prefer male voices for finance content
             
             # Use a deterministic approach to select a voice based on channel type
+            # This ensures we get the same voice each time for a given channel type
             if gender == 'male':
                 voices = self.male_voices
             elif gender == 'female':
@@ -361,13 +281,12 @@ class VoiceDiversification:
                 return "default"
             
             # Use a hash of the channel type to select a consistent voice
+            # This is deterministic - same channel type will always get the same voice
             index = hash(channel_type) % len(voices)
-            selected_voice = voices[index]
-            print(colored(f"Selected voice for {channel_type}: {selected_voice}", "blue"))
-            return selected_voice
+            return voices[index]
             
         except Exception as e:
-            print(colored(f"Error selecting voice: {str(e)}", "red"))
+            print(f"Error selecting voice: {str(e)}")
             return "default"
 
     def get_emotion_for_content(self, content_type):

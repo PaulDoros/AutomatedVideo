@@ -31,7 +31,6 @@ import openai
 import glob
 import traceback
 import logging
-import requests
 
 # Third-party imports
 from TTS.api import TTS
@@ -849,394 +848,189 @@ class VideoGenerator:
             return None
 
     async def _process_background_videos(self, channel_type, script=None):
-        """Process background videos with improved handling for short videos and fallbacks"""
+        """Process background videos for the channel - now with smart video management"""
         try:
-            # Create directories if they don't exist
-            os.makedirs("assets/videos/categorized", exist_ok=True)
-            os.makedirs("temp/backgrounds", exist_ok=True)
+            print(colored("\n=== Processing Background Videos ===", "blue"))
             
-            # Analyze script to get search terms
-            if script:
-                script_analysis = self._analyze_script_content(script)
-                search_terms = self._generate_search_terms(script_analysis)
-                print(colored(f"Generated search terms: {', '.join(search_terms)}", "blue"))
-            else:
-                search_terms = self._generate_generic_search_terms(channel_type)
-                print(colored(f"Using generic search terms: {', '.join(search_terms)}", "blue"))
+            # Create directory if it doesn't exist
+            video_dir = os.path.join("assets", "videos", channel_type)
+            os.makedirs(video_dir, exist_ok=True)
             
-            # Get all available background videos
-            background_videos = []
-            used_videos = set()  # Track used videos to avoid repetition
-            min_video_duration = 8.0  # Minimum acceptable video duration in seconds
+            # Create a directory for categorized videos
+            categorized_dir = os.path.join("assets", "videos", "categorized")
+            os.makedirs(categorized_dir, exist_ok=True)
             
-            # Try each search term
-            for term in search_terms:
-                # Sanitize the search term for directory name
-                term_dir = self._sanitize_filename(term)
-                directory = f"assets/videos/categorized/{term_dir}"
-                os.makedirs(directory, exist_ok=True)
-                
-                # Check if we already have videos for this term
-                existing_videos = glob.glob(f"{directory}/*.mp4")
-                
-                # If we don't have enough videos, download more
-                if len(existing_videos) < 3:
-                    print(colored(f"Downloading more videos for '{term}'...", "blue"))
-                    try:
-                        # Try to download more videos from Pexels
-                        await self._search_and_save_videos(term, directory, count=5)
-                        # Update the list of existing videos
-                        existing_videos = glob.glob(f"{directory}/*.mp4")
-                    except Exception as e:
-                        print(colored(f"Error downloading videos: {str(e)}", "yellow"))
-                
-                # Check each video for usability
-                for video_path in existing_videos:
-                    # Skip if we've already used this video
-                    if video_path in used_videos:
-                        continue
-                        
-                    try:
-                        # Check video duration
-                        video = VideoFileClip(video_path)
-                        duration = video.duration
-                        video.close()
-                        
-                        if duration >= min_video_duration:
-                            background_videos.append(video_path)
-                            used_videos.add(video_path)
-                            print(colored(f"Added background video: {os.path.basename(video_path)} ({duration:.2f}s)", "green"))
-                        else:
-                            # Instead of skipping short videos, we'll use them but mark them for looping
-                            background_videos.append((video_path, "short"))
-                            used_videos.add(video_path)
-                            print(colored(f"⚠️ Warning: Video too short ({duration:.2f}s), will loop it: {os.path.basename(video_path)}", "yellow"))
-                    except Exception as e:
-                        print(colored(f"Error checking video {os.path.basename(video_path)}: {str(e)}", "yellow"))
+            # Number of videos to use for a more dynamic video
+            target_video_count = 4  # We want to use 4 videos for a more dynamic experience
             
-            # If we don't have enough usable videos, try to download more with broader terms
-            if len(background_videos) < 3:
-                broader_terms = [
-                    "abstract background", "creative animation", "digital technology",
-                    "business professional", "modern lifestyle", "nature scenery"
-                ]
-                
-                # Select terms based on channel type
-                if channel_type == "tech_humor":
-                    broader_terms.extend(["technology", "computer", "coding", "digital art"])
-                elif channel_type == "ai_money":
-                    broader_terms.extend(["finance", "business growth", "money", "success"])
-                elif channel_type == "baby_tips":
-                    broader_terms.extend(["baby", "family", "parenting", "children"])
-                elif channel_type == "quick_meals":
-                    broader_terms.extend(["cooking", "food preparation", "kitchen", "ingredients"])
-                elif channel_type == "fitness_motivation":
-                    broader_terms.extend(["workout", "exercise", "fitness", "healthy lifestyle"])
-                
-                print(colored(f"Not enough usable videos. Trying broader terms: {', '.join(broader_terms[:3])}", "blue"))
-                
-                for term in broader_terms:
-                    if len(background_videos) >= 5:
-                        break
-                        
-                    term_dir = self._sanitize_filename(term)
-                    directory = f"assets/videos/categorized/{term_dir}"
-                    os.makedirs(directory, exist_ok=True)
+            # Initialize final video list
+            final_videos = []
+            
+            # Step 1: Analyze script to identify key themes and categories
+            script_analysis = self._analyze_script_content(script) if script else {}
+            
+            # Extract main categories from script analysis
+            categories = []
+            if 'main_subject' in script_analysis:
+                categories.extend(script_analysis['main_subject'])
+            if 'objects' in script_analysis:
+                categories.extend(script_analysis['objects'])
+            if 'environment' in script_analysis:
+                categories.extend(script_analysis['environment'])
+            
+            # Add channel type as a category
+            categories.append(channel_type)
+            
+            # Remove duplicates and empty strings
+            categories = [cat for cat in list(dict.fromkeys(categories)) if cat]
+            
+            print(colored(f"Identified categories: {', '.join(categories)}", "blue"))
+            
+            # Step 2: Check for categorized videos first
+            categorized_videos = []
+            for category in categories:
+                category_dir = os.path.join(categorized_dir, self._sanitize_filename(category))
+                if os.path.exists(category_dir):
+                    category_videos = [os.path.join(category_dir, f) for f in os.listdir(category_dir) 
+                                     if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(category_dir, f)) > 0]
                     
+                    # Verify each video is valid
+                    for video_path in category_videos:
+                        try:
+                            video = VideoFileClip(video_path)
+                            if video.duration >= 3:  # At least 3 seconds
+                                categorized_videos.append(video_path)
+                            video.close()
+                        except Exception as e:
+                            print(colored(f"Error checking video {video_path}: {str(e)}", "yellow"))
+                    
+            if categorized_videos:
+                print(colored(f"Found {len(categorized_videos)} relevant categorized videos", "green"))
+                # If we have more than needed, randomly select some
+                if len(categorized_videos) > target_video_count:
+                    selected = random.sample(categorized_videos, target_video_count)
+                    final_videos.extend(selected)
+                    print(colored(f"Selected {len(selected)} categorized videos", "green"))
+                else:
+                    final_videos.extend(categorized_videos)
+            
+            # Step 3: Check channel-specific videos if we need more
+            if len(final_videos) < target_video_count:
+                remaining_slots = target_video_count - len(final_videos)
+                
+                # Check if we have local videos for this channel
+                channel_videos = [os.path.join(video_dir, f) for f in os.listdir(video_dir) 
+                               if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(video_dir, f)) > 0]
+                
+                # Verify each video is valid
+                valid_channel_videos = []
+                for video_path in channel_videos:
                     try:
-                        await self._search_and_save_videos(term, directory, count=3)
-                        new_videos = glob.glob(f"{directory}/*.mp4")
-                        
-                        for video_path in new_videos:
-                            if video_path not in used_videos:
-                                try:
-                                    video = VideoFileClip(video_path)
-                                    duration = video.duration
-                                    video.close()
-                                    
-                                    if duration >= min_video_duration:
-                                        background_videos.append(video_path)
-                                        used_videos.add(video_path)
-                                        print(colored(f"Added additional background video: {os.path.basename(video_path)} ({duration:.2f}s)", "green"))
-                                        if len(background_videos) >= 5:
-                                            break
-                                    else:
-                                        # Use short videos but mark them for looping
-                                        background_videos.append((video_path, "short"))
-                                        used_videos.add(video_path)
-                                        print(colored(f"⚠️ Warning: Additional video too short ({duration:.2f}s), will loop it: {os.path.basename(video_path)}", "yellow"))
-                                        if len(background_videos) >= 5:
-                                            break
-                                except Exception as e:
-                                    print(colored(f"Error checking additional video: {str(e)}", "yellow"))
+                        video = VideoFileClip(video_path)
+                        if video.duration >= 3:  # At least 3 seconds
+                            valid_channel_videos.append(video_path)
+                        video.close()
                     except Exception as e:
-                        print(colored(f"Error downloading additional videos: {str(e)}", "yellow"))
+                        print(colored(f"Error checking video {video_path}: {str(e)}", "yellow"))
+                
+                if valid_channel_videos:
+                    # If we have more than needed, randomly select some
+                    if len(valid_channel_videos) > remaining_slots:
+                        selected = random.sample(valid_channel_videos, remaining_slots)
+                        final_videos.extend(selected)
+                        print(colored(f"Added {len(selected)} channel-specific videos", "green"))
+                    else:
+                        final_videos.extend(valid_channel_videos)
+                        print(colored(f"Added {len(valid_channel_videos)} channel-specific videos", "green"))
             
-            # If we still don't have enough videos, try to use images as fallback
-            if len(background_videos) < 2:
-                print(colored("Not enough videos available. Using images as fallback.", "yellow"))
-                background_videos = self._get_fallback_images(channel_type, search_terms)
+            # Step 4: Download new videos if needed
+            if len(final_videos) < target_video_count and script:
+                remaining_slots = target_video_count - len(final_videos)
+                print(colored(f"Need {remaining_slots} more videos, downloading from Pexels", "blue"))
+                
+                # Get video suggestions from GPT
+                suggestions = await self._get_video_suggestions(script)
+                
+                if suggestions:
+                    # Generate search terms from suggestions and script analysis
+                    search_terms = []
+                    
+                    # Add GPT suggestions first (they're usually better)
+                    for suggestion in suggestions:
+                        if isinstance(suggestion, dict) and 'term' in suggestion:
+                            term = suggestion['term']
+                            if term and len(term) > 3:
+                                search_terms.append(term)
+                        elif isinstance(suggestion, str):
+                            if suggestion.startswith('**') and suggestion.endswith('**'):
+                                term = suggestion.strip('*').strip()
+                                if term and len(term) > 3:
+                                    search_terms.append(term)
+                    
+                    # Add terms from script analysis as backup
+                    analysis_terms = self._generate_search_terms(script_analysis)
+                    search_terms.extend(analysis_terms)
+                    
+                    # Deduplicate terms
+                    search_terms = list(dict.fromkeys(search_terms))
+                    
+                    # Limit to remaining slots
+                    search_terms = search_terms[:remaining_slots]
+                    
+                    # Search for videos and save them to categorized directories
+                    for term in search_terms:
+                        # Create category directory
+                        category_dir = os.path.join(categorized_dir, self._sanitize_filename(term))
+                        os.makedirs(category_dir, exist_ok=True)
+                        
+                        # Download video
+                        videos = await self._search_and_save_videos(term, category_dir, count=1)
+                        if videos:
+                            final_videos.extend(videos)
+                            print(colored(f"Downloaded and categorized video for '{term}'", "green"))
+                        
+                        # If we have enough videos, stop downloading
+                        if len(final_videos) >= target_video_count:
+                            break
+                    
+            # Step 5: If we still don't have enough videos, use generic search terms
+            if len(final_videos) < 2 and script:
+                print(colored("Not enough videos, searching for more from Pexels", "yellow"))
+                
+                # Generate more search terms
+                more_terms = self._generate_generic_search_terms(channel_type)
+                
+                # Search for videos
+                for term in more_terms:
+                    # Create category directory
+                    category_dir = os.path.join(categorized_dir, self._sanitize_filename(term))
+                    os.makedirs(category_dir, exist_ok=True)
+                    
+                    # Download video
+                    videos = await self._search_and_save_videos(term, category_dir, count=1)
+                    if videos:
+                        final_videos.extend(videos)
+                        print(colored(f"Downloaded and categorized video for '{term}'", "green"))
+                    
+                    # If we have enough videos, stop searching
+                    if len(final_videos) >= 2:
+                        break
             
-            # If we still don't have any usable backgrounds, create a default one
-            if not background_videos:
-                print(colored("No usable backgrounds found. Creating default background.", "yellow"))
-                default_bg = self._create_default_background(channel_type)
-                background_videos = [default_bg]
+            # If we have at least 2 videos, return them
+            if len(final_videos) >= 2:
+                print(colored(f"Using {len(final_videos)} videos for a dynamic video", "green"))
+                return final_videos
             
-            # Shuffle the videos for variety
-            random.shuffle(background_videos)
-            
-            return background_videos
+            # If all else fails, create a default background
+            print(colored("No videos found, creating default background", "yellow"))
+            return self._create_default_background(channel_type)
             
         except Exception as e:
             print(colored(f"Error processing background videos: {str(e)}", "red"))
             traceback.print_exc()
-            # Create and return a default background as fallback
-            return [self._create_default_background(channel_type)]
+            # Create a default background as fallback
+            return self._create_default_background(channel_type)
     
-    def _get_fallback_images(self, channel_type, search_terms):
-        """Get fallback images when videos aren't available and convert them to video clips"""
-        try:
-            # Create directory for fallback images
-            os.makedirs("assets/images/fallback", exist_ok=True)
-            
-            background_videos = []
-            
-            # Try to download images from Pexels or Pixabay
-            api_keys = {
-                'pexels': os.getenv('PEXELS_API_KEY'),
-                'pixabay': os.getenv('PIXABAY_API_KEY')
-            }
-            
-            # Check if we have valid API keys
-            valid_apis = [api for api, key in api_keys.items() if key]
-            
-            if not valid_apis:
-                print(colored("No valid API keys found for image sources.", "yellow"))
-                return background_videos
-            
-            # Try each search term
-            for term in search_terms[:3]:  # Limit to first 3 terms
-                # Try each available API
-                for api in valid_apis:
-                    try:
-                        # Create a unique filename for this image-based video
-                        output_path = f"temp/backgrounds/image_bg_{self._sanitize_filename(term)}_{int(time.time())}.mp4"
-                        
-                        if api == 'pexels':
-                            # Download image from Pexels
-                            headers = {'Authorization': api_keys['pexels']}
-                            response = requests.get(
-                                f"https://api.pexels.com/v1/search?query={term}&per_page=15&orientation=portrait",
-                                headers=headers
-                            )
-                            
-                            if response.status_code == 200:
-                                data = response.json()
-                                if data['photos']:
-                                    # Get a random image from the results
-                                    photo = random.choice(data['photos'])
-                                    img_url = photo['src']['large2x']
-                                    
-                                    # Download the image
-                                    img_response = requests.get(img_url)
-                                    if img_response.status_code == 200:
-                                        img_path = f"assets/images/fallback/{self._sanitize_filename(term)}_{int(time.time())}.jpg"
-                                        with open(img_path, 'wb') as f:
-                                            f.write(img_response.content)
-                                        
-                                        print(colored(f"Downloaded image from Pexels: {img_url}", "green"))
-                                        
-                                        # Convert image to video clip with subtle animation
-                                        self._create_video_from_image(img_path, output_path, duration=15)
-                                        background_videos.append(output_path)
-                                        
-                                        if len(background_videos) >= 3:
-                                            return background_videos
-                        
-                        elif api == 'pixabay':
-                            # Download image from Pixabay
-                            response = requests.get(
-                                f"https://pixabay.com/api/?key={api_keys['pixabay']}&q={term}&image_type=photo&orientation=vertical&per_page=15"
-                            )
-                            
-                            if response.status_code == 200:
-                                data = response.json()
-                                if data['hits']:
-                                    # Get a random image from the results
-                                    photo = random.choice(data['hits'])
-                                    img_url = photo['largeImageURL']
-                                    
-                                    # Download the image
-                                    img_response = requests.get(img_url)
-                                    if img_response.status_code == 200:
-                                        img_path = f"assets/images/fallback/{self._sanitize_filename(term)}_{int(time.time())}.jpg"
-                                        with open(img_path, 'wb') as f:
-                                            f.write(img_response.content)
-                                        
-                                        print(colored(f"Downloaded image from Pixabay: {img_url}", "green"))
-                                        
-                                        # Convert image to video clip with subtle animation
-                                        self._create_video_from_image(img_path, output_path, duration=15)
-                                        background_videos.append(output_path)
-                                        
-                                        if len(background_videos) >= 3:
-                                            return background_videos
-                    
-                    except Exception as e:
-                        print(colored(f"Error getting fallback image from {api}: {str(e)}", "yellow"))
-            
-            return background_videos
-            
-        except Exception as e:
-            print(colored(f"Error getting fallback images: {str(e)}", "red"))
-            return []
-    
-    def _create_video_from_image(self, image_path, output_path, duration=15):
-        """Create a video clip from an image with subtle animation"""
-        try:
-            # Load the image
-            img = ImageClip(image_path).set_duration(duration)
-            
-            # Resize to vertical format (9:16)
-            img = img.resize(height=1920)
-            
-            # Center crop to 9:16 aspect ratio if needed
-            if img.w > 1080:
-                # Crop from center
-                x_center = img.w / 2
-                img = img.crop(x1=x_center-540, y1=0, x2=x_center+540, y2=1920)
-            
-            # Add subtle zoom and pan animation
-            def zoom_effect(t):
-                # Zoom from 1.0 to 1.05 over the duration
-                zoom = 1.0 + (0.05 * t / duration)
-                return zoom
-            
-            img = img.resize(lambda t: zoom_effect(t))
-            
-            # Write the video file
-            img.write_videofile(output_path, fps=30, codec='libx264', audio=False)
-            print(colored(f"Created video from image: {output_path}", "green"))
-            
-            return output_path
-            
-        except Exception as e:
-            print(colored(f"Error creating video from image: {str(e)}", "red"))
-            return None
-
-    async def _search_and_save_videos(self, term, directory, count=3):
-        """Search and download videos from Pexels with improved error handling"""
-        try:
-            # Check if we have a Pexels API key
-            api_key = os.getenv('PEXELS_API_KEY')
-            if not api_key:
-                print(colored("No Pexels API key found. Set the PEXELS_API_KEY environment variable.", "yellow"))
-                return
-            
-            # Set up headers for Pexels API
-            headers = {'Authorization': api_key}
-            
-            # Search for videos
-            response = requests.get(
-                f"https://api.pexels.com/videos/search?query={term}&per_page={count*2}&orientation=portrait",
-                headers=headers
-            )
-            
-            if response.status_code != 200:
-                print(colored(f"Pexels API error: {response.status_code} - {response.text}", "yellow"))
-                return
-            
-            data = response.json()
-            videos = data.get('videos', [])
-            
-            if not videos:
-                print(colored(f"No videos found for term: {term}", "yellow"))
-                return
-            
-            # Shuffle videos for variety
-            random.shuffle(videos)
-            
-            # Download videos
-            downloaded = 0
-            for video in videos:
-                if downloaded >= count:
-                    break
-                
-                # Get the video files
-                video_files = video.get('video_files', [])
-                
-                # Filter for HD or SD quality and portrait orientation
-                suitable_files = [
-                    f for f in video_files 
-                    if (f.get('quality') in ['hd', 'sd']) and 
-                    (f.get('width', 0) < f.get('height', 0))  # Portrait orientation
-                ]
-                
-                if not suitable_files:
-                    continue
-                
-                # Sort by quality (HD first, then SD)
-                suitable_files.sort(key=lambda x: 0 if x.get('quality') == 'hd' else 1)
-                
-                # Get the best quality file
-                video_file = suitable_files[0]
-                video_url = video_file.get('link')
-                
-                if not video_url:
-                    continue
-                
-                try:
-                    # Generate a unique filename
-                    video_id = video.get('id', uuid.uuid4())
-                    filename = f"{directory}/{video_id}.mp4"
-                    
-                    # Download the video if it doesn't already exist
-                    if not os.path.exists(filename):
-                        print(colored(f"Downloading video: {video_url}", "blue"))
-                        
-                        # Stream the download to handle large files
-                        with requests.get(video_url, stream=True) as r:
-                            r.raise_for_status()
-                            with open(filename, 'wb') as f:
-                                for chunk in r.iter_content(chunk_size=8192):
-                                    f.write(chunk)
-                        
-                        print(colored(f"Downloaded video: {os.path.basename(filename)}", "green"))
-                        
-                        # Verify the video is valid
-                        try:
-                            video_clip = VideoFileClip(filename)
-                            duration = video_clip.duration
-                            video_clip.close()
-                            
-                            if duration < 5:  # Too short
-                                print(colored(f"Video too short ({duration:.2f}s), removing", "yellow"))
-                                os.remove(filename)
-                                continue
-                                
-                            downloaded += 1
-                            
-                        except Exception as e:
-                            print(colored(f"Invalid video file, removing: {str(e)}", "yellow"))
-                            if os.path.exists(filename):
-                                os.remove(filename)
-                            continue
-                    else:
-                        # File already exists
-                        downloaded += 1
-                        print(colored(f"Video already exists: {os.path.basename(filename)}", "blue"))
-                
-                except Exception as e:
-                    print(colored(f"Error downloading video: {str(e)}", "yellow"))
-                    continue
-            
-            print(colored(f"Downloaded {downloaded} videos for term: {term}", "green"))
-            
-        except Exception as e:
-            print(colored(f"Error searching and saving videos: {str(e)}", "red"))
-            traceback.print_exc()
-
     def _sanitize_filename(self, filename):
         """Sanitize a string to be used as a filename"""
         # Replace spaces with underscores and remove invalid characters
@@ -1261,6 +1055,456 @@ class VideoGenerator:
         }
         
         return generic_terms.get(channel_type, ['abstract background', 'colorful motion', 'dynamic background'])
+
+    async def _search_and_save_videos(self, term, directory, count):
+        """Helper function to search and save videos"""
+        try:
+            urls = search_for_stock_videos(
+                query=term,
+                api_key=self.pexels_api_key,
+                it=count,
+                min_dur=3
+            )
+            
+            saved_paths = []
+            for url in urls:
+                saved_path = save_video(url, directory)
+                if saved_path:
+                    saved_paths.append(saved_path)
+            
+            return saved_paths
+        except Exception as e:
+            print(colored(f"Search failed for '{term}': {str(e)}", "yellow"))
+            return []
+
+    def _create_default_background(self, channel_type, duration=15):
+        """Create a default background video if no suitable videos are found"""
+        try:
+            print(colored("\n=== Creating Default Background Video ===", "blue"))
+            
+            # Create directory if it doesn't exist
+            os.makedirs("temp/backgrounds", exist_ok=True)
+            
+            # Generate a unique filename
+            default_path = f"temp/backgrounds/default_{channel_type}_{int(time.time())}.mp4"
+            
+            # Create a gradient background based on channel type
+            from thumbnail_generator import ThumbnailGenerator
+            thumbnail_gen = ThumbnailGenerator()
+            
+            # Select colors based on channel type
+            colors = {
+                'tech_humor': ['#3a1c71', '#d76d77'],  # Purple gradient
+                'ai_money': ['#4e54c8', '#8f94fb'],    # Blue gradient
+                'baby_tips': ['#11998e', '#38ef7d'],   # Green gradient
+                'quick_meals': ['#e1eec3', '#f05053'], # Yellow-red gradient
+                'fitness_motivation': ['#355c7d', '#6c5b7b']  # Cool blue-purple gradient
+            }
+            
+            # Get colors for this channel or use default
+            gradient_colors = colors.get(channel_type, ['#2b5876', '#4e4376'])
+            
+            # Create gradient image
+            gradient = thumbnail_gen.create_gradient(gradient_colors)
+            
+            # Convert to numpy array for MoviePy
+            gradient_array = np.array(gradient)
+            
+            # Create a clip with the gradient
+            clip = ImageClip(gradient_array).set_duration(duration)
+            
+            # Resize to vertical format (9:16)
+            clip = clip.resize((1080, 1920))
+            
+            # Add subtle animation (zoom effect)
+            # Use a simpler approach without lambda functions
+            clip = clip.resize(1.05)  # 5% zoom
+            
+            # Add a subtle text label based on channel type
+            channel_labels = {
+                'tech_humor': "Tech Tips",
+                'ai_money': "AI Insights",
+                'baby_tips': "Parenting Tips",
+                'quick_meals': "Quick Recipe",
+                'fitness_motivation': "Fitness Tips"
+            }
+            
+            label = channel_labels.get(channel_type, "Tips & Tricks")
+            
+            # Create text clip
+            txt_clip = TextClip(
+                label,
+                fontsize=70,
+                color='white',
+                font='Arial-Bold',
+                stroke_color='black',
+                stroke_width=2,
+                method='label'  # Faster than 'caption'
+            )
+            
+            # Position text at the bottom
+            txt_clip = txt_clip.set_position(('center', 1700)).set_duration(duration)
+            
+            # Combine clips
+            final_clip = CompositeVideoClip([clip, txt_clip], size=(1080, 1920))
+            
+            # Detect number of CPU cores for optimal threading
+            cpu_count = multiprocessing.cpu_count()
+            optimal_threads = max(4, min(cpu_count - 1, 8))  # Use at least 4 threads, but leave 1 core free
+            
+            # Write video file with optimized settings
+            final_clip.write_videofile(
+                default_path,
+                codec='libx264',
+                fps=30,
+                preset='faster',  # Use faster preset for better performance
+                audio=False,
+                ffmpeg_params=["-shortest", "-avoid_negative_ts", "1"],  # Prevent warnings
+                threads=optimal_threads
+            )
+            
+            # Clean up
+            try:
+                clip.close()
+                txt_clip.close()
+                final_clip.close()
+            except:
+                pass  # Ignore errors during cleanup
+            
+            print(colored("Created default background video", "yellow"))
+            return [default_path]
+            
+        except Exception as e:
+            print(colored(f"Error creating default background: {str(e)}", "red"))
+            return None
+
+    def create_section_clip(self, index, title, content, total_sections):
+        """Create a clip for a section (runs in parallel)"""
+        try:
+            print(colored(f"\nProcessing section {index}/{total_sections}", "yellow"))
+            
+            # Calculate duration based on content length
+            duration = min(max(len(content.split()) / 2, 3), 10)
+            
+            # Create background (using numpy for speed)
+            bg_array = np.zeros((1920, 1080, 3), dtype=np.uint8)
+            bg = ColorClip(bg_array, duration=duration)
+            
+            # Create text clips
+            clips = [bg]
+            
+            if title:
+                title_clip = TextClip(
+                    title,
+                    fontsize=80,
+                    color='white',
+                    font='Montserrat-Bold',
+                    size=(1000, None),
+                    method='label'  # Faster than 'caption'
+                )
+                title_clip = title_clip.set_position(('center', 200)).set_duration(duration)
+                clips.append(title_clip)
+            
+            content_clip = TextClip(
+                content,
+                fontsize=60,
+                color='white',
+                font='Montserrat-Bold',
+                size=(900, None),
+                method='label'  # Faster than 'caption'
+            )
+            content_clip = content_clip.set_position('center').set_duration(duration)
+            clips.append(content_clip)
+            
+            # Combine clips
+            scene = CompositeVideoClip(clips)
+            print(colored(f"✓ Section {index} complete (duration: {duration:.1f}s)", "green"))
+            
+            return scene, duration
+            
+        except Exception as e:
+            print(colored(f"Error in section {index}: {str(e)}", "red"))
+            return None, 0
+
+    def split_into_sections(self, script):
+        """Split script into sections, handling different formats"""
+        sections = []
+        lines = script.split('\n')
+        current_title = ""
+        current_content = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check for section markers
+            if line.startswith('[') and line.endswith(']'):
+                # Save previous section if exists
+                if current_content:
+                    sections.append((current_title, '\n'.join(current_content)))
+                    current_content = []
+                current_title = line.strip('[]')
+            elif line.startswith('**') and line.endswith('**'):
+                # Alternative section marker
+                if current_content:
+                    sections.append((current_title, '\n'.join(current_content)))
+                    current_content = []
+                current_title = line.strip('*')
+            else:
+                current_content.append(line)
+        
+        # Add final section
+        if current_content:
+            sections.append((current_title, '\n'.join(current_content)))
+        
+        return sections
+
+    def _cleanup_temp_files(self):
+        """Clean up temporary files after video generation"""
+        try:
+            # Clean up temporary files
+            for file in glob.glob("temp/segments/*.mp4"):
+                try:
+                    os.remove(file)
+                except Exception as e:
+                    print(colored(f"Warning: Could not remove {file}: {str(e)}", "yellow"))
+            
+            for file in glob.glob("temp/tts/sentence_*.wav"):
+                try:
+                    os.remove(file)
+                except Exception as e:
+                    print(colored(f"Warning: Could not remove {file}: {str(e)}", "yellow"))
+                    
+            print(colored("✓ Temporary files cleaned up", "green"))
+            
+        except Exception as e:
+            print(colored(f"Warning: Error cleaning up temporary files: {str(e)}", "yellow"))
+
+    def cleanup_video_library(self, channel_type=None, max_videos=20, days_to_keep=30):
+        """
+        Clean up the video library to prevent excessive accumulation of videos.
+        
+        Args:
+            channel_type: Specific channel to clean up, or None for all channels
+            max_videos: Maximum number of videos to keep per channel/category
+            days_to_keep: Keep videos newer than this many days regardless of count
+        """
+        try:
+            # Clean up channel-specific videos
+            channels = [channel_type] if channel_type else ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
+            
+            for channel in channels:
+                video_dir = os.path.join("assets", "videos", channel)
+                if os.path.exists(video_dir):
+                    self._cleanup_directory(video_dir, max_videos, days_to_keep)
+            
+            # Clean up categorized videos
+            categorized_dir = os.path.join("assets", "videos", "categorized")
+            if os.path.exists(categorized_dir):
+                # Get all category directories
+                categories = [d for d in os.listdir(categorized_dir) 
+                             if os.path.isdir(os.path.join(categorized_dir, d))]
+                
+                for category in categories:
+                    category_dir = os.path.join(categorized_dir, category)
+                    self._cleanup_directory(category_dir, max_videos, days_to_keep)
+                
+                print(colored(f"Cleaned up {len(categories)} video categories", "green"))
+                
+        except Exception as e:
+            print(colored(f"Warning: Error cleaning up video library: {str(e)}", "yellow"))
+            traceback.print_exc()
+    
+    def _cleanup_directory(self, directory, max_videos=20, days_to_keep=30):
+        """Helper method to clean up a specific directory of videos"""
+        try:
+            # Get all videos in the directory
+            videos = [os.path.join(directory, f) for f in os.listdir(directory) 
+                     if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(directory, f)) > 0]
+            
+            # If we have fewer videos than the maximum, no need to clean up
+            if len(videos) <= max_videos:
+                print(colored(f"Video library for {os.path.basename(directory)} is within limits ({len(videos)}/{max_videos})", "green"))
+                return
+            
+            print(colored(f"Cleaning up video library for {os.path.basename(directory)} ({len(videos)} videos, keeping max {max_videos})", "blue"))
+            
+            # Get video info with creation time
+            video_info = []
+            cutoff_date = time.time() - (days_to_keep * 24 * 60 * 60)  # Convert days to seconds
+            
+            for video_path in videos:
+                # Get creation time
+                creation_time = os.path.getctime(video_path)
+                # Add to list
+                video_info.append({
+                    'path': video_path,
+                    'created': creation_time,
+                    'keep': creation_time > cutoff_date  # Keep if newer than cutoff
+                })
+            
+            # Sort by creation time (oldest first)
+            video_info.sort(key=lambda x: x['created'])
+            
+            # Count videos to keep (those marked as keep)
+            keep_count = sum(1 for v in video_info if v['keep'])
+            
+            # If we're keeping more than max_videos due to age, adjust max_videos
+            if keep_count > max_videos:
+                print(colored(f"Keeping {keep_count} videos for {os.path.basename(directory)} due to age restriction", "yellow"))
+                return
+            
+            # Calculate how many videos to delete
+            delete_count = len(videos) - max(max_videos, keep_count)
+            
+            if delete_count <= 0:
+                print(colored(f"No videos need to be deleted for {os.path.basename(directory)}", "green"))
+                return
+            
+            # Delete oldest videos that aren't marked to keep
+            deleted = 0
+            for video in video_info:
+                if deleted >= delete_count:
+                    break
+                    
+                if not video['keep']:
+                    try:
+                        os.remove(video['path'])
+                        deleted += 1
+                        print(colored(f"Deleted old video: {os.path.basename(video['path'])}", "yellow"))
+                    except Exception as e:
+                        print(colored(f"Warning: Could not remove {video['path']}: {str(e)}", "yellow"))
+            
+            print(colored(f"Cleaned up {deleted} videos for {os.path.basename(directory)}", "green"))
+            
+        except Exception as e:
+            print(colored(f"Warning: Error cleaning up directory {directory}: {str(e)}", "yellow"))
+
+    async def _generate_delayed_subtitles(self, script, audio_path, channel_type, delay=1.0):
+        """Generate subtitles with a delay for padding"""
+        try:
+            print(colored(f"\n=== Generating Subtitles with {delay}s Delay ===", "blue"))
+            
+            # First generate normal subtitles
+            temp_subs_path = generate_subtitles(
+                script=script,
+                audio_path=audio_path,
+                content_type=channel_type
+            )
+            
+            if not temp_subs_path:
+                raise ValueError("Failed to generate base subtitles")
+            
+            # Now shift all subtitles by the delay
+            delayed_subs_path = f"temp/subtitles/delayed_{uuid.uuid4()}.srt"
+            
+            # Read original subtitles
+            subs = pysrt.open(temp_subs_path)
+            
+            # Shift all subtitles by the delay amount
+            for sub in subs:
+                sub.start.seconds += delay
+                sub.end.seconds += delay
+            
+            # Save shifted subtitles
+            subs.save(delayed_subs_path, encoding='utf-8-sig')
+            
+            print(colored(f"✓ Generated subtitles with {delay}s delay", "green"))
+            return delayed_subs_path
+            
+        except Exception as e:
+            print(colored(f"Delayed subtitles generation failed: {str(e)}", "red"))
+            return None
+
+    async def create_tts_audio(self, script, channel_type, voice=None):
+        """Create TTS audio from script"""
+        try:
+            # Create temp directory
+            os.makedirs("temp/tts", exist_ok=True)
+            
+            # Get voice for channel
+            if not voice and self.use_coqui_tts:
+                voice, emotion = self.select_coqui_voice(channel_type)
+                print(colored(f"Selected voice: {voice} (emotion: {emotion})", "blue"))
+                
+                # Apply speed multiplier based on content type and emotion
+                speed_multiplier = 1.0
+                if channel_type == 'tech_humor':
+                    # Faster for tech humor content
+                    speed_multiplier = 1.3
+                    print(colored(f"Using speed multiplier of {speed_multiplier} for {channel_type} content", "blue"))
+                elif emotion in ["energetic", "enthusiastic", "playful"]:
+                    # Faster for energetic emotions
+                    speed_multiplier = 1.25
+                    print(colored(f"Using speed multiplier of {speed_multiplier} for {emotion} {channel_type} content", "blue"))
+                
+                # Generate TTS audio with Coqui
+                from coqui_integration import CoquiTTSAPI
+                
+                coqui = CoquiTTSAPI()
+                
+                # Process script into sentences for better TTS quality
+                print(colored(f"Processing {len(script.split('.'))} sentences for better TTS quality", "blue"))
+                
+                # Generate TTS for each sentence separately for better quality
+                sentences = [s.strip() for s in script.split('.') if s.strip()]
+                audio_files = []
+                
+                print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed_multiplier})", "blue"))
+                
+                for i, sentence in enumerate(sentences):
+                    # Add period back if it was removed by split
+                    if not sentence.endswith(('!', '?', '.')):
+                        sentence += '.'
+                    
+                    # Add slight pause between sentences
+                    if i > 0:
+                        sentence = f"<break time='0.2s'/> {sentence}"
+                    
+                    # Generate audio for this sentence
+                    output_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
+                    result = await coqui.generate_voice(
+                        text=sentence,
+                        speaker=voice,
+                        language="en",
+                        emotion=emotion,
+                        speed=speed_multiplier,
+                        output_path=output_path
+                    )
+                    
+                    if result:
+                        audio_files.append(result)
+                    else:
+                        print(colored(f"Failed to generate TTS for sentence: {sentence}", "red"))
+                
+                # Combine all sentence audio files
+                if audio_files:
+                    # Create output path
+                    output_path = f"temp/tts/{channel_type}_{emotion}_{int(time.time())}.wav"
+                    
+                    # Concatenate audio files
+                    from pydub import AudioSegment
+                    combined = AudioSegment.empty()
+                    for audio_file in audio_files:
+                        segment = AudioSegment.from_file(audio_file)
+                        combined += segment
+                    
+                    # Export combined audio
+                    combined.export(output_path, format="wav")
+                    
+                    print(colored(f"✓ Generated voice file: {output_path}", "green"))
+                    return output_path
+            
+            # If we get here, either no Coqui TTS or no audio files were generated
+            return None
+            
+        except Exception as e:
+            print(colored(f"Error creating TTS audio: {str(e)}", "red"))
+            return None
+        finally:
+            # Clean up temporary files if needed
+            pass
 
     async def _generate_video(self, tts_path, subtitles_path, background_videos, channel_type, custom_output_path=None):
         """Generate a video with the given TTS audio and subtitles"""
@@ -1506,81 +1750,4 @@ class VideoGenerator:
         else:
             self._music_volume = value
             print(colored(f"Music volume set to {self._music_volume}", "cyan"))
-
-    def _cleanup_temp_files(self):
-        """Clean up temporary files created during video generation"""
-        try:
-            print(colored("ℹ️ Cleaning up resources...", "blue"))
-            temp_dirs = ["temp", "temp/segments"]
-            for temp_dir in temp_dirs:
-                if os.path.exists(temp_dir):
-                    for file in os.listdir(temp_dir):
-                        try:
-                            file_path = os.path.join(temp_dir, file)
-                            if os.path.isfile(file_path):
-                                os.remove(file_path)
-                        except Exception as e:
-                            print(colored(f"Warning: Error cleaning up: {str(e)}", "yellow"))
-        except Exception as e:
-            print(colored(f"Warning: Error during cleanup: {str(e)}", "yellow"))
-            
-    def cleanup_video_library(self, channel_type, max_videos=20, days_to_keep=30):
-        """Clean up video library to prevent excessive accumulation
-        
-        Args:
-            channel_type (str): The channel type to clean up
-            max_videos (int): Maximum number of videos to keep per channel
-            days_to_keep (int): Always keep videos newer than this many days
-        """
-        try:
-            print(colored(f"ℹ️ Cleaning up video library for {channel_type}...", "blue"))
-            
-            # Define the output directory for this channel
-            output_dir = os.path.join("output", "videos", channel_type)
-            if not os.path.exists(output_dir):
-                return
-                
-            # Get all video files for this channel
-            video_files = []
-            for file in os.listdir(output_dir):
-                if file.endswith(".mp4") and not file.startswith("temp_"):
-                    file_path = os.path.join(output_dir, file)
-                    # Get file creation time
-                    creation_time = os.path.getctime(file_path)
-                    video_files.append((file_path, creation_time))
-            
-            # Sort by creation time (newest first)
-            video_files.sort(key=lambda x: x[1], reverse=True)
-            
-            # Calculate the cutoff date for keeping videos
-            import time
-            from datetime import datetime, timedelta
-            cutoff_date = time.time() - (days_to_keep * 24 * 60 * 60)
-            
-            # Keep track of how many videos we're keeping
-            kept_videos = 0
-            
-            # Process each video
-            for file_path, creation_time in video_files:
-                # Always keep videos newer than the cutoff date
-                if creation_time >= cutoff_date:
-                    kept_videos += 1
-                    continue
-                    
-                # Keep up to max_videos
-                if kept_videos < max_videos:
-                    kept_videos += 1
-                    continue
-                    
-                # Delete older videos beyond our limit
-                try:
-                    os.remove(file_path)
-                    print(colored(f"Removed old video: {os.path.basename(file_path)}", "yellow"))
-                except Exception as e:
-                    print(colored(f"Error removing old video: {str(e)}", "yellow"))
-                    
-            print(colored(f"Kept {kept_videos} videos for {channel_type}", "green"))
-            
-        except Exception as e:
-            print(colored(f"Error cleaning up video library: {str(e)}", "yellow"))
 

@@ -30,11 +30,8 @@ import time
 import shutil
 import subprocess
 import asyncio
-
-from tiktokvoice import tts
 from music_provider import MusicProvider
 import concurrent.futures
-from pydub import AudioSegment
 
 # First activate your virtual environment and install pysrt:
 # python -m pip install pysrt --no-cache-dir
@@ -155,21 +152,6 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         # Define patterns to filter out
         special_patterns = ["---", "***", "**", "##"]
         
-        # Define common emojis to add for different content types if not already present
-        emoji_sets = {
-            'tech_humor': ['💻', '🤖', '😂', '🚀', '🔥', '⚡', '🧠', '🤯', '👨‍💻', '👩‍💻', '🛠️', '🔧'],
-            'ai_money': ['💰', '💸', '🤖', '📈', '💼', '🚀', '💡', '🔑', '💵', '🏆', '📊', '💹'],
-            'baby_tips': ['👶', '🍼', '🧸', '👨‍👩‍👧‍👦', '💤', '🌙', '❤️', '🤱', '👨‍👩‍👦', '🧠', '🍎', '🏠'],
-            'quick_meals': ['🍳', '🍲', '⏱️', '🥗', '🍽️', '🔪', '🥘', '🍴', '🥑', '🍅', '🧄', '🧅'],
-            'fitness_motivation': ['💪', '🏋️', '🏃', '🧘', '🥗', '❤️', '🔥', '⚡', '🏆', '🌟', '⏱️', '🧠']
-        }
-        
-        # Check if script already has emojis
-        has_emojis = any(emoji.is_emoji(c) for c in script)
-        
-        # Get emoji set for this content type or use tech_humor as default
-        emojis = emoji_sets.get(content_type, emoji_sets['tech_humor'])
-        
         for line in lines:
             line = line.strip()
             if not line:
@@ -195,15 +177,6 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
                     break
             
             if not skip_line and line.strip():
-                # Check if line already has emojis
-                line_has_emoji = any(emoji.is_emoji(c) for c in line)
-                
-                # Only add emojis if the script doesn't already have them
-                if not has_emojis and not line_has_emoji:
-                    # Add emoji at the end of the line (30% chance)
-                    if random.random() < 0.3:
-                        line = f"{line} {random.choice(emojis)}"
-                
                 raw_sentences.append(line)
         
         # Check if we have any sentences after processing
@@ -316,34 +289,24 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         total_words = sum(len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)]) 
                           for sentence in sentences)
         
-        # Analyze audio duration to better sync subtitles
-        # Reserve 95% of the audio duration for subtitles, leaving 5% for natural pauses
-        usable_duration = total_duration * 0.95
+        # Allocate time proportionally based on word count
+        # Reserve 90% of the audio duration for subtitles, leaving 10% for natural pauses
+        usable_duration = total_duration * 0.9
         
-        # Calculate average speaking rate (words per second)
-        if total_words > 0:
-            words_per_second = total_words / usable_duration
-            print(colored(f"Speaking rate: {words_per_second:.2f} words per second", "blue"))
-        else:
-            words_per_second = 2.5  # Default speaking rate if no words
-        
-        # Write SRT file with improved timing
+        # Write SRT file directly from the original lines
         with open(subtitles_path, "w", encoding="utf-8-sig") as f:
             current_time = 0.2  # Start with a small initial delay (0.2s)
             
             for i, sentence in enumerate(sentences):
-                # Calculate word count for timing (excluding emojis)
+                # Calculate word count for timing
                 word_count = len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)])
                 
-                # Calculate duration based on word count and speaking rate
-                # Add a small buffer for natural pauses between sentences
-                if word_count > 0:
-                    est_duration = (word_count / words_per_second) + 0.3
-                    # Ensure minimum and maximum durations
-                    est_duration = max(1.0, min(5.0, est_duration))
+                # Calculate duration proportionally to word count
+                if total_words > 0:
+                    proportion = word_count / total_words
+                    est_duration = max(1.0, min(4.0, usable_duration * proportion))
                 else:
-                    # If the sentence is just emojis, use a short duration
-                    est_duration = 1.0
+                    est_duration = 2.0  # Default duration if no words
                 
                 # Ensure we don't exceed audio duration
                 if current_time + est_duration > total_duration:
@@ -360,43 +323,14 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
                 f.write(f"{start_time} --> {end_time}\n")
                 f.write(f"{sentence}\n\n")
                 
-                # Update current time for next subtitle
-                # Overlap slightly for smoother transitions
-                current_time += est_duration - 0.1
-                if current_time < 0:
-                    current_time = 0
+                # Gap between subtitles - smaller gap for better flow
+                current_time += est_duration + 0.1
             
-            # Ensure the last subtitle extends to the end of the audio
-            if sentences and current_time < total_duration:
-                # We need to reopen the file in read mode first, then write mode
-                f.close()
-                
-                # Read the file content
-                with open(subtitles_path, "r", encoding="utf-8-sig") as read_f:
-                    subs = read_f.read()
-                
-                lines = subs.split('\n')
-                
-                # Find the last timestamp line
-                for i in range(len(lines) - 1, -1, -1):
-                    if ' --> ' in lines[i]:
-                        # Update the end time
-                        parts = lines[i].split(' --> ')
-                        lines[i] = f"{parts[0]} --> {format_time(total_duration)}"
-                        break
-                
-                # Write the updated content back to the file
-                with open(subtitles_path, "w", encoding="utf-8-sig") as write_f:
-                    write_f.write('\n'.join(lines))
-                
-                print(colored("Extended final subtitle until end of video", "blue"))
-        
-        print(colored(f"✅ Generated {len(sentences)} subtitles with improved timing", "green"))
+        log_success(f"Generated {len(sentences)} subtitles with improved timing")
         return subtitles_path
-        
+    
     except Exception as e:
-        print(colored(f"Error generating subtitles: {str(e)}", "red"))
-        traceback.print_exc()
+        log_error(f"Error generating subtitles: {str(e)}")
         return None
 
 def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
@@ -421,9 +355,6 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
             video_path = video_paths[0]
             if isinstance(video_path, dict):
                 video_path = video_path.get('path')
-            elif isinstance(video_path, tuple) and len(video_path) == 2:
-                # Handle tuple format (path, "short") for short videos
-                video_path = video_path[0]
                 
             if not os.path.exists(video_path):
                 log_error(f"Video file does not exist: {video_path}")
@@ -479,13 +410,8 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
             # Get path (handle both dict and string formats)
             if isinstance(video_data, dict):
                 video_path = video_data.get('path')
-            elif isinstance(video_data, tuple) and len(video_data) == 2:
-                # Handle tuple format (path, "short") for short videos
-                video_path = video_data[0]
-                is_short = video_data[1] == "short"
             else:
                 video_path = video_data
-                is_short = False
             
             log_info(f"Video path: {video_path}")
             
@@ -498,29 +424,24 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
                 # Load video
                 video = VideoFileClip(video_path, fps_source="fps")
                 
-                # Handle short videos by looping them
                 if video.duration < segment_duration:
-                    if is_short or isinstance(video_data, tuple):
-                        log_info(f"Short video ({video.duration:.2f}s), looping to reach segment duration")
-                        video = vfx.loop(video, duration=segment_duration)
-                    else:
-                        # Even if not explicitly marked as short, loop it if needed
-                        log_info(f"Video shorter than segment duration ({video.duration:.2f}s < {segment_duration:.2f}s), looping")
-                        video = vfx.loop(video, duration=segment_duration)
+                    log_warning(f"Video too short ({video.duration:.2f}s), skipping")
+                    video.close()
+                    continue
                 
-                # Choose a random starting point if video is longer than needed
-                if video.duration > segment_duration:
-                    max_start = max(0, video.duration - segment_duration)
-                    start_time = random.uniform(0, max_start)
-                    # Create a subclip
-                    video = video.subclip(start_time, start_time + segment_duration)
+                # Choose a random starting point
+                max_start = max(0, video.duration - segment_duration)
+                start_time = random.uniform(0, max_start)
+                
+                # Create a subclip
+                subclip = video.subclip(start_time, start_time + segment_duration)
                 
                 # Resize to vertical format
-                video = resize_to_vertical(video)
+                subclip = resize_to_vertical(subclip)
                 
                 # Save segment to a file
                 segment_path = os.path.join(temp_dir, f"segment_{i}.mp4")
-                video.write_videofile(
+                subclip.write_videofile(
                     segment_path,
                     codec="libx264",
                     audio=False,
@@ -533,6 +454,7 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
                 log_success(f"Created segment {i+1}: {segment_path}")
                 
                 # Close clips
+                subclip.close()
                 video.close()
                 
             except Exception as e:
@@ -586,38 +508,9 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
             if process.returncode != 0:
                 log_error(f"FFmpeg error: {process.stderr}")
                 
-                # Try an alternative approach using moviepy
-                log_warning("FFmpeg concatenation failed, trying MoviePy concatenation")
-                try:
-                    # Load all segments
-                    clips = [VideoFileClip(segment) for segment in segment_files]
-                    
-                    # Concatenate clips
-                    final_clip = concatenate_videoclips(clips)
-                    
-                    # Write to file
-                    final_clip.write_videofile(
-                        output_path,
-                        codec="libx264",
-                        audio=False,
-                        fps=30,
-                        preset="medium",
-                        threads=n_threads
-                    )
-                    
-                    # Close clips
-                    for clip in clips:
-                        clip.close()
-                    final_clip.close()
-                    
-                    log_success("Successfully concatenated segments using MoviePy")
-                    return output_path
-                except Exception as e:
-                    log_error(f"MoviePy concatenation error: {str(e)}")
-                    
-                    # Fallback to using the first segment
-                    log_warning("All concatenation methods failed, using first segment as fallback")
-                    shutil.copy(segment_files[0], output_path)
+                # Fallback to using the first segment
+                log_warning("Concatenation failed, using first segment as fallback")
+                shutil.copy(segment_files[0], output_path)
             else:
                 log_success("Successfully concatenated segments")
             
@@ -631,19 +524,20 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
                 log_warning("Using first segment as fallback")
                 shutil.copy(segment_files[0], output_path)
                 return output_path
-            except Exception as e2:
-                log_error(f"Error using fallback segment: {str(e2)}")
+            except Exception as inner_e:
+                log_error(f"Fallback failed: {str(inner_e)}")
                 return None
-                
+            
     except Exception as e:
         log_error(f"Error in combine_videos: {str(e)}")
+        log_error(traceback.format_exc())
         return None
 
 def get_background_music(content_type: str, duration: float = None) -> str:
     """Get background music based on content type"""
     try:
         # Use the new music provider to get music
-        music_path = asyncio.run(MusicProvider.get_music_for_channel(content_type, duration))
+        music_path = asyncio.run(music_provider.get_music_for_channel(content_type, duration))
         
         if music_path and os.path.exists(music_path):
             print(colored(f"✓ Using background music for {content_type}", "green"))
@@ -1237,91 +1131,38 @@ def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
         return None
 
 def trim_audio_file(audio_path, output_path=None, trim_end=0.15):
-    """Trim silence from the beginning and end of an audio file with improved handling"""
+    """Trim silence and artifacts from audio file"""
     try:
-        # If no output path is provided, use the input path
-        if not output_path:
-            output_path = audio_path
+        print(colored(f"Trimming audio file: {audio_path}", "cyan"))
         
-        # Load the audio file
-        audio = AudioSegment.from_file(audio_path)
+        # Load audio
+        audio = AudioFileClip(audio_path)
         
-        # Get the original duration
-        original_duration = len(audio) / 1000.0  # in seconds
+        # Increase trim amount to remove strange sounds at the end
+        trim_end = 0.3  # Increase from 0.15 to 0.3 seconds
         
-        # Only trim if the audio is longer than 3 seconds
-        if original_duration <= 3:
-            print(colored(f"Audio too short ({original_duration:.2f}s), skipping trimming", "yellow"))
-            return audio_path
-        
-        # Detect silence at the beginning
-        silence_threshold = -50  # dB
-        min_silence_len = 100    # ms
-        
-        # Find silence at the beginning
-        def detect_leading_silence(sound, silence_threshold=-50.0, chunk_size=10):
-            """Detect silence at the beginning of a sound file"""
-            trim_ms = 0
-            while trim_ms < len(sound) and sound[trim_ms:trim_ms+chunk_size].dBFS < silence_threshold:
-                trim_ms += chunk_size
-            return trim_ms
-        
-        # Find silence at the end
-        def detect_trailing_silence(sound, silence_threshold=-50.0, chunk_size=10):
-            """Detect silence at the end of a sound file"""
-            trim_ms = len(sound)
-            while trim_ms > 0 and sound[trim_ms-chunk_size:trim_ms].dBFS < silence_threshold:
-                trim_ms -= chunk_size
-            return trim_ms
-        
-        # Detect silence
-        start_trim = detect_leading_silence(audio, silence_threshold)
-        end_trim = detect_trailing_silence(audio, silence_threshold)
-        
-        # Ensure we don't trim too much
-        # Never trim more than 0.5s from the beginning
-        start_trim = min(start_trim, 500)  # 500ms = 0.5s
-        
-        # For the end, calculate a safe trim amount based on audio duration
-        # For longer audio, we can trim a bit more
-        if original_duration > 10:
-            # For longer audio, trim at most 0.3s from the end
-            max_end_trim = 300  # 300ms = 0.3s
-        else:
-            # For shorter audio, trim at most 0.1s from the end
-            max_end_trim = 100  # 100ms = 0.1s
-        
-        # Calculate how much we would trim from the end
-        end_trim_amount = len(audio) - end_trim
-        
-        # Limit the end trim
-        end_trim_amount = min(end_trim_amount, max_end_trim)
-        end_trim = len(audio) - end_trim_amount
+        # Calculate new duration
+        new_duration = max(0.1, audio.duration - trim_end)
         
         # Trim the audio
-        trimmed_audio = audio[start_trim:end_trim]
+        trimmed_audio = audio.subclip(0, new_duration)
         
-        # Calculate how much was trimmed
-        trimmed_duration = len(trimmed_audio) / 1000.0  # in seconds
-        trimmed_amount = original_duration - trimmed_duration
+        # Add a gentle fade out
+        trimmed_audio = trimmed_audio.audio_fadeout(0.2)
         
-        # Only save if we actually trimmed something
-        if trimmed_amount > 0.05:  # Only save if we trimmed more than 50ms
-            # Export the trimmed audio
-            trimmed_audio.export(output_path, format="mp3")
-            print(colored(f"Trimmed {trimmed_amount:.2f}s from audio (start: {start_trim/1000:.2f}s, end: {end_trim_amount/1000:.2f}s)", "green"))
-        else:
-            print(colored("No significant silence detected, using original audio", "blue"))
-            # If we didn't trim anything significant, just copy the original file
-            if output_path != audio_path:
-                shutil.copy(audio_path, output_path)
+        # Save to the specified output path or the same path if not provided
+        output_path = output_path if output_path else audio_path
+        trimmed_audio.write_audiofile(output_path, fps=44100)
         
+        # Clean up
+        audio.close()
+        trimmed_audio.close()
+        
+        print(colored(f"✓ Trimmed {trim_end}s from end of audio", "green"))
         return output_path
         
     except Exception as e:
         print(colored(f"Error trimming audio: {str(e)}", "red"))
-        traceback.print_exc()
-        # Return the original file if trimming fails
         return audio_path
 
 def enhance_tts_prompt(script, content_type):
