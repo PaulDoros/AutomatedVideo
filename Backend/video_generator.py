@@ -180,28 +180,55 @@ class AudioManager:
             
             print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed})", "blue"))
             
-            # Generate voice using the Coqui TTS API
-            result = await self.voice_diversifier.api.generate_voice(
-                text=text,
-                speaker=voice,
-                language="en",
-                emotion=emotion,
-                speed=speed,
-                output_path=output_path
-            )
+            # Process script into sentences for better TTS quality
+            print(colored(f"Processing {len(text.split('.'))} sentences for better TTS quality", "blue"))
             
-            if result:
-                # Convert WAV to MP3 for compatibility with video generation
-                mp3_path = os.path.join(self.voiceovers_dir, f"{os.path.splitext(os.path.basename(result))[0]}.mp3")
+            # Generate TTS for each sentence separately for better quality
+            sentences = [s.strip() for s in text.split('.') if s.strip()]
+            audio_files = []
+            
+            for i, sentence in enumerate(sentences):
+                # Add period back if it was removed by split
+                if not sentence.endswith(('!', '?', '.')):
+                    sentence += '.'
                 
-                # Use pydub to convert WAV to MP3
-                audio = AudioSegment.from_wav(result)
-                audio.export(mp3_path, format="mp3", bitrate="128k")
+                # Add slight pause between sentences
+                if i > 0:
+                    sentence = f"<break time='0.2s'/> {sentence}"
                 
-                print(colored(f"✓ Generated TTS audio with Coqui: {mp3_path}", "green"))
-                return mp3_path
-            else:
-                raise ValueError("Failed to generate TTS with Coqui")
+                # Generate audio for this sentence
+                sentence_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
+                result = await self.voice_diversifier.api.generate_voice(
+                    text=sentence,
+                    speaker=voice,
+                    language="en",
+                    emotion=emotion,
+                    speed=speed,
+                    output_path=sentence_path
+                )
+                
+                if result:
+                    audio_files.append(result)
+                else:
+                    print(colored(f"Failed to generate TTS for sentence: {sentence}", "red"))
+            
+            # Combine all sentence audio files
+            if audio_files:
+                # Concatenate audio files
+                from pydub import AudioSegment
+                combined = AudioSegment.empty()
+                for audio_file in audio_files:
+                    segment = AudioSegment.from_file(audio_file)
+                    combined += segment
+                
+                # Export combined audio
+                combined.export(output_path, format="wav")
+                
+                print(colored(f"✓ Generated voice file: {output_path}", "green"))
+                return output_path
+            
+            return None
+            
         except Exception as e:
             print(colored(f"Coqui TTS failed: {str(e)}", "red"))
             return None
@@ -423,38 +450,43 @@ class VideoGenerator:
             # Load script from file
             try:
                 with open(script_file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    
+                    # Try to parse as JSON first
                     try:
-                        # Try to load as JSON first
-                        script_data = json.load(f)
-                        script = script_data.get('script', '')
+                        script_data = json.loads(content)
+                        if isinstance(script_data, dict):
+                            script = script_data.get('script', '')
+                        else:
+                            script = str(script_data)
                     except json.JSONDecodeError:
-                        # If not JSON, reset file pointer and read as plain text
-                        f.seek(0)
-                        script = f.read()
+                        # If not valid JSON, use the content as is
+                        script = content
+                    
+                    # Check if we have a plain text version of the script (which might be better formatted)
+                    txt_script_file = script_file.replace('.json', '.txt')
+                    if os.path.exists(txt_script_file):
+                        try:
+                            with open(txt_script_file, 'r', encoding='utf-8') as f:
+                                txt_script = f.read().strip()
+                                if txt_script:
+                                    print(colored("Using plain text version of script for better formatting", "green"))
+                                    script = txt_script
+                        except Exception as e:
+                            print(colored(f"Error loading plain text script: {str(e)}", "yellow"))
+                            # Continue with the JSON script
+                    
+                    # Print the script being used
+                    print(colored(f"Script to be used for video generation:\n{script}", "blue"))
+                    
+                    # Check if script is empty
+                    if not script.strip():
+                        print(colored("Error: Script is empty", "red"))
+                        return False
+                    
             except Exception as e:
                 print(colored(f"Error loading script: {str(e)}", "red"))
                 return False
-                
-            # Check if script is empty
-            if not script.strip():
-                print(colored("Error: Script is empty", "red"))
-                return False
-                
-            # Check if we have a plain text version of the script (which might be better formatted)
-            txt_script_file = script_file.replace('.json', '.txt')
-            if os.path.exists(txt_script_file):
-                try:
-                    with open(txt_script_file, 'r', encoding='utf-8') as f:
-                        txt_script = f.read()
-                        if txt_script.strip():
-                            print(colored("Using plain text version of script for better formatting", "green"))
-                            script = txt_script
-                except Exception as e:
-                    print(colored(f"Error loading plain text script: {str(e)}", "yellow"))
-                    # Continue with the JSON script
-            
-            # Print the script being used
-            print(colored(f"Script to be used for video generation:\n{script}", "blue"))
             
             # Get voice for channel
             voice = self.get_voice_for_channel(channel_type)
@@ -539,15 +571,27 @@ class VideoGenerator:
             # Use Coqui TTS for diverse voices
             if self.use_coqui_tts:
                 try:
-                    # Select appropriate emotion for the content type
-                    # (voice selection will be handled by the API based on whether the model supports speakers)
+                    # Select appropriate voice for the channel type
                     voice, emotion = self.audio_manager.select_coqui_voice(channel_type)
+                    print(colored(f"Selected Coqui voice: {voice} (emotion: {emotion})", "green"))
+                    
+                    # Apply speed multiplier based on content type and emotion
+                    speed_multiplier = 1.0
+                    if channel_type == 'tech_humor':
+                        # Faster for tech humor content
+                        speed_multiplier = 1.3
+                        print(colored(f"Using speed multiplier of {speed_multiplier} for {channel_type} content", "blue"))
+                    elif emotion in ["energetic", "enthusiastic", "playful"]:
+                        # Faster for energetic emotions
+                        speed_multiplier = 1.25
+                        print(colored(f"Using speed multiplier of {speed_multiplier} for {emotion} {channel_type} content", "blue"))
                     
                     # Generate TTS using Coqui
                     tts_path = await self.audio_manager.generate_tts_coqui(
                         clean_script, 
                         voice=voice, 
-                        emotion=emotion
+                        emotion=emotion,
+                        speed=speed_multiplier
                     )
                     
                     if tts_path:
@@ -569,7 +613,7 @@ class VideoGenerator:
             else:
                 print(colored("Failed to generate TTS", "red"))
                 return None
-                
+        
         except Exception as e:
             print(colored(f"Error generating TTS: {str(e)}", "red"))
             return None
@@ -1416,95 +1460,6 @@ class VideoGenerator:
         except Exception as e:
             print(colored(f"Delayed subtitles generation failed: {str(e)}", "red"))
             return None
-
-    async def create_tts_audio(self, script, channel_type, voice=None):
-        """Create TTS audio from script"""
-        try:
-            # Create temp directory
-            os.makedirs("temp/tts", exist_ok=True)
-            
-            # Get voice for channel
-            if not voice and self.use_coqui_tts:
-                voice, emotion = self.select_coqui_voice(channel_type)
-                print(colored(f"Selected voice: {voice} (emotion: {emotion})", "blue"))
-                
-                # Apply speed multiplier based on content type and emotion
-                speed_multiplier = 1.0
-                if channel_type == 'tech_humor':
-                    # Faster for tech humor content
-                    speed_multiplier = 1.3
-                    print(colored(f"Using speed multiplier of {speed_multiplier} for {channel_type} content", "blue"))
-                elif emotion in ["energetic", "enthusiastic", "playful"]:
-                    # Faster for energetic emotions
-                    speed_multiplier = 1.25
-                    print(colored(f"Using speed multiplier of {speed_multiplier} for {emotion} {channel_type} content", "blue"))
-                
-                # Generate TTS audio with Coqui
-                from coqui_integration import CoquiTTSAPI
-                
-                coqui = CoquiTTSAPI()
-                
-                # Process script into sentences for better TTS quality
-                print(colored(f"Processing {len(script.split('.'))} sentences for better TTS quality", "blue"))
-                
-                # Generate TTS for each sentence separately for better quality
-                sentences = [s.strip() for s in script.split('.') if s.strip()]
-                audio_files = []
-                
-                print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed_multiplier})", "blue"))
-                
-                for i, sentence in enumerate(sentences):
-                    # Add period back if it was removed by split
-                    if not sentence.endswith(('!', '?', '.')):
-                        sentence += '.'
-                    
-                    # Add slight pause between sentences
-                    if i > 0:
-                        sentence = f"<break time='0.2s'/> {sentence}"
-                    
-                    # Generate audio for this sentence
-                    output_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
-                    result = await coqui.generate_voice(
-                        text=sentence,
-                        speaker=voice,
-                        language="en",
-                        emotion=emotion,
-                        speed=speed_multiplier,
-                        output_path=output_path
-                    )
-                    
-                    if result:
-                        audio_files.append(result)
-                    else:
-                        print(colored(f"Failed to generate TTS for sentence: {sentence}", "red"))
-                
-                # Combine all sentence audio files
-                if audio_files:
-                    # Create output path
-                    output_path = f"temp/tts/{channel_type}_{emotion}_{int(time.time())}.wav"
-                    
-                    # Concatenate audio files
-                    from pydub import AudioSegment
-                    combined = AudioSegment.empty()
-                    for audio_file in audio_files:
-                        segment = AudioSegment.from_file(audio_file)
-                        combined += segment
-                    
-                    # Export combined audio
-                    combined.export(output_path, format="wav")
-                    
-                    print(colored(f"✓ Generated voice file: {output_path}", "green"))
-                    return output_path
-            
-            # If we get here, either no Coqui TTS or no audio files were generated
-            return None
-            
-        except Exception as e:
-            print(colored(f"Error creating TTS audio: {str(e)}", "red"))
-            return None
-        finally:
-            # Clean up temporary files if needed
-            pass
 
     async def _generate_video(self, tts_path, subtitles_path, background_videos, channel_type, custom_output_path=None):
         """Generate a video with the given TTS audio and subtitles"""
