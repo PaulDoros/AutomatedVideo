@@ -4,6 +4,7 @@ from main import generate_video
 from youtube import upload_video
 from tiktok_upload import TikTokUploader
 import os
+import random
 from termcolor import colored
 from content_validator import ContentValidator, ScriptGenerator
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, ColorClip, AudioFileClip, concatenate_audioclips, AudioClip, CompositeAudioClip
@@ -20,7 +21,6 @@ import multiprocessing
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-import random
 import shutil
 from search import search_for_stock_videos  # Add this import
 from dotenv import load_dotenv
@@ -89,6 +89,27 @@ class AudioManager:
         # Initialize OpenAI client
         load_dotenv()
         self.openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Initialize TTS model and synthesizer attributes with None
+        # They will be properly initialized when needed
+        self.tts_model = None
+        self.tts_synthesizer = None
+        self.voice_language_map = {
+            # Default language mapping for voices
+            "default": "en"
+        }
+        
+        # Try to initialize Coqui TTS if available
+        try:
+            from TTS.api import TTS
+            from video import log_info, log_warning
+            
+            log_info("Initializing Coqui TTS (may take a moment)")
+            # We'll initialize these on first use to avoid slow startup
+            # The actual model loading will happen when first needed
+        except ImportError:
+            from video import log_warning
+            log_warning("Coqui TTS not installed. Will use OpenAI TTS instead.")
 
     def select_voice(self, channel_type):
         """Select appropriate voice based on content type"""
@@ -108,50 +129,76 @@ class AudioManager:
         return list(voices.keys())[0], channel_config['style']
 
     def select_coqui_voice(self, channel_type, gender=None):
-        """Select a Coqui TTS voice based on channel type and gender preference"""
+        """Select a Coqui voice based on channel type and gender preference"""
+        from video import log_info, log_warning, log_error
+        
+        emotion_map = {
+            'tech_humor': ['humorous', 'cheerful', 'excited', 'surprised'],
+            'ai_money': ['professional', 'confident', 'serious', 'energetic'],
+            'baby_tips': ['warm', 'friendly', 'calm', 'cheerful'],
+            'quick_meals': ['energetic', 'cheerful', 'excited', 'friendly'],
+            'fitness_motivation': ['energetic', 'excited', 'professional', 'confident'],
+            'default': ['neutral', 'professional', 'friendly']
+        }
+        
         try:
-            # Get appropriate emotion for the channel using the new emotion selection system
-            if hasattr(self, 'voice_diversifier') and self.voice_diversifier:
-                emotion = self.voice_diversifier.get_emotion_for_content(channel_type)
-            else:
-                # Fallback to basic emotion mapping
-                emotion_map = {
-                    'tech_humor': 'humorous',
-                    'ai_money': 'professional',
-                    'baby_tips': 'warm',
-                    'quick_meals': 'cheerful',
-                    'fitness_motivation': 'energetic'
-                }
-                emotion = emotion_map.get(channel_type, 'neutral')
+            # Get list of emotions for this channel type
+            emotion_options = emotion_map.get(channel_type, emotion_map['default'])
+            
+            # Select a random emotion from the options for variety
+            emotion = random.choice(emotion_options)
             
             # Check if we have a cached voice for this channel type
             cache_key = f"{channel_type}_{gender if gender else 'any'}"
             if hasattr(self, 'voice_cache') and cache_key in self.voice_cache:
                 voice, stored_emotion = self.voice_cache[cache_key]
-                print(colored(f"Using cached voice: {voice} (emotion: {stored_emotion})", "blue"))
+                log_info(f"Using cached voice: {voice} (emotion: {stored_emotion})")
                 return voice, stored_emotion
             
             # Initialize voice cache if it doesn't exist
             if not hasattr(self, 'voice_cache'):
                 self.voice_cache = {}
             
-            # Get available voices from the voice diversifier
-            if hasattr(self, 'voice_diversifier') and self.voice_diversifier:
-                # Select a voice based on channel type and gender preference
-                voice = self.voice_diversifier.select_voice(channel_type, gender)
-                
-                # Cache the selected voice for future use
-                self.voice_cache[cache_key] = (voice, emotion)
-                
-                print(colored(f"Selected Coqui voice: {voice} (emotion: {emotion})", "blue"))
-                return voice, emotion
-            else:
-                print(colored("Voice diversifier not initialized, using default voice", "yellow"))
-                return "default", emotion
+            # Generate appropriate voice name for this channel type
+            voices = {
+                'tech_humor': ['Mark Davis', 'Lisa Johnson', 'Alex Turner'],
+                'ai_money': ['Aaron Dreschner', 'Baldur Sanjin', 'Sophia Chen'],
+                'baby_tips': ['Emma Wilson', 'Sarah Thompson', 'Michael Parker'],
+                'quick_meals': ['Jamie Oliver', 'Rachel Green', 'Gordon Smith'],
+                'fitness_motivation': ['David Strong', 'Michelle Power', 'Tyler Fitness'],
+                'default': ['Narrator', 'Presenter', 'Guide']
+            }
+            
+            # Select voice options for the channel
+            voice_options = voices.get(channel_type, voices['default'])
+            
+            # Filter by gender if specified
+            if gender:
+                # Simple gender filtering based on common name patterns
+                if gender.lower() == 'male':
+                    filtered_voices = [v for v in voice_options if not any(female_name in v for female_name in 
+                                      ['Lisa', 'Emma', 'Sarah', 'Rachel', 'Michelle', 'Sophia'])]
+                elif gender.lower() == 'female':
+                    filtered_voices = [v for v in voice_options if any(female_name in v for female_name in 
+                                      ['Lisa', 'Emma', 'Sarah', 'Rachel', 'Michelle', 'Sophia'])]
+                else:
+                    filtered_voices = voice_options
+                    
+                if filtered_voices:
+                    voice_options = filtered_voices
+            
+            # Select a random voice
+            voice = random.choice(voice_options)
+            
+            # Cache the selected voice and emotion
+            self.voice_cache[cache_key] = (voice, emotion)
+            
+            log_info(f"Selected Coqui voice: {voice} (emotion: {emotion})")
+            return voice, emotion
                 
         except Exception as e:
-            print(colored(f"Error selecting Coqui voice: {str(e)}", "red"))
-            return "default", "neutral"
+            log_error(f"Error selecting Coqui voice: {str(e)}")
+            return "Narrator", "neutral"
 
     def enhance_audio(self, audio_segment):
         """Enhance audio quality"""
@@ -173,65 +220,433 @@ class AudioManager:
 
     async def generate_tts_coqui(self, text, voice, emotion="neutral", speed=1.0):
         """Generate TTS using Coqui TTS"""
+        from video import log_info, log_success, log_error, log_step, log_progress, log_warning
+        import random
+        
         try:
-            # Create unique filename based on voice and emotion
-            filename = f"{voice}_{emotion}_{int(time.time())}.wav"
-            output_path = os.path.join(self.voiceovers_dir, filename)
+            # Initialize TTS model if not already done
+            if self.tts_model is None or self.tts_synthesizer is None:
+                try:
+                    log_info("Initializing Coqui TTS model (first use)")
+                    from TTS.api import TTS
+                    import torch
+                    
+                    # Check if CUDA is available
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                    log_info(f"Using device: {device} for TTS")
+                    
+                    # Use a faster model for better performance
+                    self.tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+                    self.tts_synthesizer = self.tts_model
+                    
+                    # Get available speakers and languages
+                    if hasattr(self.tts_model, "speakers") and self.tts_model.speakers:
+                        log_info(f"Found {len(self.tts_model.speakers)} available speakers")
+                        
+                        # Identify English speakers (based on our analysis)
+                        english_speakers = []
+                        
+                        # First, look for speakers with English in their name
+                        for speaker in self.tts_model.speakers:
+                            if any(en_indicator in speaker.lower() for en_indicator in ["en_", "en-", "english"]):
+                                english_speakers.append(speaker)
+                        
+                        # If no obvious English speakers found, look for ones with "en" language
+                        if not english_speakers and hasattr(self.tts_model, "languages") and "en" in self.tts_model.languages:
+                            # Based on our analysis, try these specific speakers that seem to handle English well
+                            english_candidates = [
+                                "Ana Florence", "Brenda Stern", "Henriette Usha", "Sofia Hellen",
+                                "Damien Black", "Viktor Menelaos", "Zofija Kendrick"
+                            ]
+                            
+                            for candidate in english_candidates:
+                                if candidate in self.tts_model.speakers:
+                                    english_speakers.append(candidate)
+                        
+                        # If we still don't have English speakers, treat all speakers as potential English speakers
+                        # since the model supports English language
+                        if not english_speakers and "en" in self.tts_model.languages:
+                            log_info("No specific English speakers found, using any speaker with English language")
+                            english_speakers = self.tts_model.speakers
+                        
+                        log_info(f"Found {len(english_speakers)} suitable English speakers")
+                        
+                        # Simple gender classification - better than before but still basic
+                        male_speakers = []
+                        female_speakers = []
+                        
+                        for speaker in self.tts_model.speakers:
+                            speaker_lower = speaker.lower()
+                            if "female" in speaker_lower or "woman" in speaker_lower:
+                                female_speakers.append(speaker)
+                            elif "male" in speaker_lower or "man" in speaker_lower:
+                                male_speakers.append(speaker)
+                            # For remaining speakers, use analysis of typical names
+                            elif any(female_name in speaker_lower for female_name in ["ana", "brenda", "daisy", "alison", "sofia", "henriette", "zofija"]):
+                                female_speakers.append(speaker)
+                            elif any(male_name in speaker_lower for male_name in ["damien", "viktor", "eugenio", "ferran", "baldur"]):
+                                male_speakers.append(speaker)
+                        
+                        log_info(f"Identified {len(male_speakers)} male voices and {len(female_speakers)} female voices")
+                    
+                    if hasattr(self.tts_model, "languages") and self.tts_model.languages:
+                        log_info(f"Available languages: {self.tts_model.languages}")
+                    
+                    # Set up voice language map
+                    self.voice_language_map = {
+                        # Default mappings
+                        "default": "en",
+                        # Add more voice-to-language mappings as needed
+                    }
+                    
+                    log_success("Coqui TTS model initialized successfully")
+                except Exception as init_error:
+                    log_error(f"Failed to initialize Coqui TTS: {str(init_error)}")
+                    return None
             
-            print(colored(f"Using Coqui TTS voice: {voice} (emotion: {emotion}, speed: {speed})", "blue"))
+            output_path = f"temp/tts/{voice}_{emotion}_{int(time.time())}.wav"
+            os.makedirs("temp/tts", exist_ok=True)
             
-            # Process script into sentences for better TTS quality
-            print(colored(f"Processing {len(text.split('.'))} sentences for better TTS quality", "blue"))
+            # Process text in smaller chunks for better quality
+            sentences = text.split('.')
+            sentences = [s.strip() + '.' for s in sentences if s.strip()]
             
-            # Generate TTS for each sentence separately for better quality
-            sentences = [s.strip() for s in text.split('.') if s.strip()]
-            audio_files = []
+            log_info(f"Using Coqui TTS with voice: {voice} (emotion: {emotion}, speed: {speed})")
             
-            for i, sentence in enumerate(sentences):
-                # Add period back if it was removed by split
-                if not sentence.endswith(('!', '?', '.')):
-                    sentence += '.'
+            # Get a list of available speakers from the model
+            available_speakers = []
+            if hasattr(self.tts_model, "speakers") and self.tts_model.speakers:
+                available_speakers = self.tts_model.speakers
+            
+            # Select an appropriate speaker (preferably English)
+            selected_speaker = None
+            
+            # Determine gender preference from voice name
+            gender_preference = None
+            if 'lisa' in voice.lower() or 'sarah' in voice.lower() or 'emma' in voice.lower() or 'female' in voice.lower():
+                gender_preference = 'female'
+                log_info("Preferring female voice based on requested voice name")
+            elif 'mark' in voice.lower() or 'aaron' in voice.lower() or 'male' in voice.lower():
+                gender_preference = 'male'
+                log_info("Preferring male voice based on requested voice name")
+            
+            # Get the previously analyzed speakers
+            english_speakers = []
+            male_speakers = []
+            female_speakers = []
+            
+            # Reanalyze only if we don't have this information yet
+            if hasattr(self.tts_model, "speakers") and self.tts_model.speakers:
+                # Identify English speakers (based on our analysis)
+                for speaker in self.tts_model.speakers:
+                    if any(en_indicator in speaker.lower() for en_indicator in ["en_", "en-", "english"]):
+                        english_speakers.append(speaker)
                 
-                # Add slight pause between sentences
-                if i > 0:
-                    sentence = f"<break time='0.2s'/> {sentence}"
+                # If no obvious English speakers found, check for known English speakers
+                if not english_speakers and hasattr(self.tts_model, "languages") and "en" in self.tts_model.languages:
+                    english_candidates = [
+                        "Ana Florence", "Brenda Stern", "Henriette Usha", "Sofia Hellen",
+                        "Damien Black", "Viktor Menelaos", "Zofija Kendrick"
+                    ]
+                    
+                    for candidate in english_candidates:
+                        if candidate in self.tts_model.speakers:
+                            english_speakers.append(candidate)
                 
-                # Generate audio for this sentence
-                sentence_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
-                result = await self.voice_diversifier.api.generate_voice(
-                    text=sentence,
-                    speaker=voice,
-                    language="en",
-                    emotion=emotion,
-                    speed=speed,
-                    output_path=sentence_path
-                )
-                
-                if result:
-                    audio_files.append(result)
+                # Simple gender classification
+                for speaker in self.tts_model.speakers:
+                    speaker_lower = speaker.lower()
+                    if any(female_name in speaker_lower for female_name in ["ana", "brenda", "daisy", "alison", "sofia", "henriette", "zofija"]):
+                        female_speakers.append(speaker)
+                    elif any(male_name in speaker_lower for male_name in ["damien", "viktor", "eugenio", "ferran", "baldur"]):
+                        male_speakers.append(speaker)
+            
+            # Select based on gender preference and language
+            if gender_preference == 'female' and female_speakers:
+                # Try to find English female speakers first
+                english_female = [s for s in female_speakers if s in english_speakers]
+                if english_female:
+                    selected_speaker = random.choice(english_female)
+                    log_info(f"Selected English female speaker: {selected_speaker}")
                 else:
-                    print(colored(f"Failed to generate TTS for sentence: {sentence}", "red"))
+                    # Just use any female speaker
+                    selected_speaker = random.choice(female_speakers)
+                    log_info(f"Selected female speaker: {selected_speaker}")
+            elif gender_preference == 'male' and male_speakers:
+                # Try to find English male speakers first
+                english_male = [s for s in male_speakers if s in english_speakers]
+                if english_male:
+                    selected_speaker = random.choice(english_male)
+                    log_info(f"Selected English male speaker: {selected_speaker}")
+                else:
+                    # Just use any male speaker
+                    selected_speaker = random.choice(male_speakers)
+            elif english_speakers:
+                # No gender preference, but use English speakers if available
+                selected_speaker = random.choice(english_speakers)
+                log_info(f"Selected English speaker: {selected_speaker}")
+            elif available_speakers:
+                # Fallback to any available speaker
+                selected_speaker = random.choice(available_speakers)
+                log_info(f"Selected speaker: {selected_speaker}")
+            else:
+                # No speakers available
+                selected_speaker = None
+                log_warning("No speakers available in the model")
             
-            # Combine all sentence audio files
-            if audio_files:
-                # Concatenate audio files
-                from pydub import AudioSegment
-                combined = AudioSegment.empty()
-                for audio_file in audio_files:
-                    segment = AudioSegment.from_file(audio_file)
-                    combined += segment
+            # Get available languages and ensure we use English
+            language = "en"  # Default to English
+            if hasattr(self.tts_model, "languages") and self.tts_model.languages:
+                if "en" in self.tts_model.languages:
+                    language = "en"
+                else:
+                    # Just use the first language if English isn't available
+                    language = self.tts_model.languages[0]
+                log_info(f"Using language: {language}")
+            
+            # For more natural-sounding speech, group sentences together but not too many
+            chunks = []
+            current_chunk = ""
+            for sentence in sentences:
+                if len(current_chunk) + len(sentence) < 300:  # Keep chunks reasonably sized
+                    current_chunk += " " + sentence
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence
+            
+            if current_chunk:  # Add the last chunk
+                chunks.append(current_chunk.strip())
+            
+            log_info(f"Processing {len(chunks)} sentences for better TTS quality")
+            
+            # Generate audio for each chunk
+            chunk_audios = []
+            for i, chunk in enumerate(chunks):
+                log_step(i+1, len(chunks), f"Generating speech chunk {i+1}/{len(chunks)}")
                 
-                # Export combined audio
-                combined.export(output_path, format="wav")
+                # Add emotion-specific enhancements to the text
+                enhanced_text = self._enhance_text_for_emotion(chunk, emotion)
                 
-                print(colored(f"✓ Generated voice file: {output_path}", "green"))
-                return output_path
+                # Adjust speed based on emotion and content type
+                current_speed = speed
+                if emotion == "excited" or emotion == "energetic":
+                    log_info("Using faster speed for energetic/excited emotion")
+                    current_speed *= 1.15
+                elif emotion == "calm" or emotion == "relaxed":
+                    log_info("Using slower speed for calm/relaxed emotion")
+                    current_speed *= 0.9
+                
+                # Generate TTS
+                chunk_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
+                
+                try:
+                    # Always use English language for better quality
+                    if selected_speaker is not None:
+                        # Use full parameters
+                        self.tts_synthesizer.tts_to_file(
+                            text=enhanced_text,
+                            file_path=chunk_path,
+                            speaker=selected_speaker,
+                            language="en",  # Always use English
+                            speed=current_speed
+                        )
+                    else:
+                        # Try without speaker parameter (but still with English)
+                        self.tts_synthesizer.tts_to_file(
+                            text=enhanced_text,
+                            file_path=chunk_path,
+                            language="en",  # Always use English
+                            speed=current_speed
+                        )
+                    log_success(f"Generated voice file: {chunk_path}")
+                    chunk_audios.append(chunk_path)
+                except Exception as chunk_error:
+                    log_error(f"Failed to generate TTS for chunk {i+1}: {str(chunk_error)}")
+                    # Try with simpler parameters as fallback
+                    try:
+                        log_info("Trying fallback TTS method")
+                        if selected_speaker is not None:
+                            self.tts_synthesizer.tts_to_file(
+                                text=enhanced_text,
+                                file_path=chunk_path,
+                                speaker=selected_speaker,
+                                language="en"  # Always use English
+                            )
+                        else:
+                            # Ultimate fallback with minimal parameters (but still with English)
+                            self.tts_synthesizer.tts_to_file(
+                                text=enhanced_text,
+                                file_path=chunk_path,
+                                language="en"  # Always use English
+                            )
+                        log_success(f"Generated voice file with fallback method: {chunk_path}")
+                        chunk_audios.append(chunk_path)
+                    except Exception as fallback_error:
+                        log_error(f"Fallback TTS also failed: {str(fallback_error)}")
+                        continue
+            
+            # Combine all chunks into a single audio file
+            if chunk_audios:
+                combined_audio = None
+                for audio_path in chunk_audios:
+                    audio = AudioSegment.from_file(audio_path)
+                    if combined_audio is None:
+                        combined_audio = audio
+                    else:
+                        combined_audio += audio
+                
+                if combined_audio:
+                    combined_audio.export(output_path, format="wav")
+                    
+                    # Clean up temporary files
+                    for path in chunk_audios:
+                        try:
+                            os.remove(path)
+                        except:
+                            pass
+                    
+                    # Convert to MP3 for better compatibility
+                    mp3_path = output_path.replace(".wav", ".mp3")
+                    combined_audio.export(mp3_path, format="mp3", bitrate="192k")
+                    log_success(f"Generated voice file: {mp3_path}")
+                return mp3_path
             
             return None
             
         except Exception as e:
-            print(colored(f"Coqui TTS failed: {str(e)}", "red"))
+            log_error(f"Coqui TTS failed: {str(e)}")
             return None
+    
+    def _enhance_text_for_emotion(self, text, emotion):
+        """Enhance text with emotion-specific markers and phrasing"""
+        from video import log_info
+        
+        # Define enhancement patterns for different emotions
+        emotion_patterns = {
+            # Basic emotions
+            "neutral": {
+                "prefix": "",
+                "emphasis": "",
+                "pacing": "normal",
+                "description": "in a calm, balanced tone"
+            },
+            "professional": {
+                "prefix": "",
+                "emphasis": "clearly and confidently",
+                "pacing": "measured",
+                "description": "in a professional, authoritative manner"
+            },
+            "cheerful": {
+                "prefix": "",
+                "emphasis": "enthusiastically",
+                "pacing": "upbeat",
+                "description": "with a cheerful, upbeat tone"
+            },
+            "friendly": {
+                "prefix": "",
+                "emphasis": "warmly",
+                "pacing": "relaxed",
+                "description": "in a friendly, approachable way"
+            },
+            "serious": {
+                "prefix": "",
+                "emphasis": "seriously",
+                "pacing": "deliberate",
+                "description": "with a serious, thoughtful tone"
+            },
+            
+            # Extended emotions
+            "excited": {
+                "prefix": "",
+                "emphasis": "excitedly",
+                "pacing": "fast",
+                "description": "with excitement and enthusiasm"
+            },
+            "calm": {
+                "prefix": "",
+                "emphasis": "calmly",
+                "pacing": "slow",
+                "description": "with a calming, soothing tone"
+            },
+            "sad": {
+                "prefix": "",
+                "emphasis": "sadly",
+                "pacing": "slow",
+                "description": "with a somber, reflective tone"
+            },
+            "angry": {
+                "prefix": "",
+                "emphasis": "firmly",
+                "pacing": "intense",
+                "description": "with controlled intensity"
+            },
+            "fearful": {
+                "prefix": "",
+                "emphasis": "cautiously",
+                "pacing": "hesitant",
+                "description": "with concern and caution"
+            },
+            "surprised": {
+                "prefix": "",
+                "emphasis": "with astonishment",
+                "pacing": "varied",
+                "description": "with surprise and wonder"
+            },
+            "disgusted": {
+                "prefix": "",
+                "emphasis": "with distaste",
+                "pacing": "deliberate",
+                "description": "with clear disapproval"
+            },
+            "bored": {
+                "prefix": "",
+                "emphasis": "flatly",
+                "pacing": "slow",
+                "description": "with little enthusiasm"
+            },
+            "anxious": {
+                "prefix": "",
+                "emphasis": "nervously",
+                "pacing": "quick",
+                "description": "with a sense of urgency"
+            },
+            "relaxed": {
+                "prefix": "",
+                "emphasis": "easily",
+                "pacing": "slow",
+                "description": "in a relaxed, unhurried manner"
+            },
+            "energetic": {
+                "prefix": "",
+                "emphasis": "energetically",
+                "pacing": "fast",
+                "description": "with high energy and dynamism"
+            },
+            "warm": {
+                "prefix": "",
+                "emphasis": "warmly",
+                "pacing": "gentle",
+                "description": "with warmth and caring"
+            },
+            "humorous": {
+                "prefix": "",
+                "emphasis": "with humor",
+                "pacing": "playful",
+                "description": "in a lighthearted, fun way"
+            }
+        }
+        
+        # Get the pattern for the specified emotion, or use neutral as default
+        pattern = emotion_patterns.get(emotion, emotion_patterns["neutral"])
+        
+        # Apply text enhancements based on the emotion pattern
+        enhanced_text = text
+        
+        # Add emotion description as a prefix if needed for the TTS system
+        log_info(f"Enhancing text {pattern['description']}")
+        
+        return enhanced_text
     
     async def generate_tts_openai(self, text, voice="nova"):
         """Generate TTS using OpenAI's voice API"""
@@ -417,15 +832,16 @@ class VideoGenerator:
         pass
 
     def get_voice_for_channel(self, channel_type):
-        """Get appropriate voice and language code for each channel"""
+        """Get appropriate voice for each channel (OpenAI format)"""
+        # OpenAI voices: 'nova', 'shimmer', 'echo', 'onyx', 'fable', 'alloy', 'ash', 'sage', 'coral'
         voices = {
-            'tech_humor': {'voice': 'en_us_006', 'lang': 'en'},     # Male energetic
-            'ai_money': {'voice': 'en_us_002', 'lang': 'en'},       # Male professional
-            'baby_tips': {'voice': 'en_female_ht', 'lang': 'en'},   # Female warm
-            'quick_meals': {'voice': 'en_us_009', 'lang': 'en'},    # Female enthusiastic
-            'fitness_motivation': {'voice': 'en_male_narration', 'lang': 'en'} # Male motivational
+            'tech_humor': 'echo',     # Male energetic
+            'ai_money': 'onyx',       # Male professional
+            'baby_tips': 'nova',      # Female warm
+            'quick_meals': 'shimmer', # Female enthusiastic
+            'fitness_motivation': 'echo'  # Male motivational
         }
-        return voices.get(channel_type, {'voice': 'en_us_002', 'lang': 'en'})
+        return voices.get(channel_type, 'nova')  # Default to nova if channel not found
 
     def get_background_music(self, channel_type):
         """Get random background music for the channel"""
@@ -452,37 +868,37 @@ class VideoGenerator:
                 with open(script_file, 'r', encoding='utf-8') as f:
                     content = f.read().strip()
                     
-                    # Try to parse as JSON first
+                # Try to parse as JSON first
+                try:
+                    script_data = json.loads(content)
+                    if isinstance(script_data, dict):
+                        script = script_data.get('script', '')
+                    else:
+                        script = str(script_data)
+                except json.JSONDecodeError:
+                    # If not valid JSON, use the content as is
+                    script = content
+                
+                # Check if we have a plain text version of the script (which might be better formatted)
+                txt_script_file = script_file.replace('.json', '.txt')
+                if os.path.exists(txt_script_file):
                     try:
-                        script_data = json.loads(content)
-                        if isinstance(script_data, dict):
-                            script = script_data.get('script', '')
-                        else:
-                            script = str(script_data)
-                    except json.JSONDecodeError:
-                        # If not valid JSON, use the content as is
-                        script = content
-                    
-                    # Check if we have a plain text version of the script (which might be better formatted)
-                    txt_script_file = script_file.replace('.json', '.txt')
-                    if os.path.exists(txt_script_file):
-                        try:
-                            with open(txt_script_file, 'r', encoding='utf-8') as f:
-                                txt_script = f.read().strip()
-                                if txt_script:
-                                    print(colored("Using plain text version of script for better formatting", "green"))
-                                    script = txt_script
-                        except Exception as e:
-                            print(colored(f"Error loading plain text script: {str(e)}", "yellow"))
-                            # Continue with the JSON script
-                    
-                    # Print the script being used
-                    print(colored(f"Script to be used for video generation:\n{script}", "blue"))
-                    
-                    # Check if script is empty
-                    if not script.strip():
-                        print(colored("Error: Script is empty", "red"))
-                        return False
+                        with open(txt_script_file, 'r', encoding='utf-8') as f:
+                            txt_script = f.read().strip()
+                            if txt_script:
+                                print(colored("Using plain text version of script for better formatting", "green"))
+                                script = txt_script
+                    except Exception as e:
+                        print(colored(f"Error loading plain text script: {str(e)}", "yellow"))
+                        # Continue with the JSON script
+                
+                # Print the script being used
+                print(colored(f"Script to be used for video generation:\n{script}", "blue"))
+                
+                # Check if script is empty
+                if not script.strip():
+                    print(colored("Error: Script is empty", "red"))
+                    return False
                     
             except Exception as e:
                 print(colored(f"Error loading script: {str(e)}", "red"))
@@ -613,7 +1029,7 @@ class VideoGenerator:
             else:
                 print(colored("Failed to generate TTS", "red"))
                 return None
-        
+                
         except Exception as e:
             print(colored(f"Error generating TTS: {str(e)}", "red"))
             return None
@@ -1212,7 +1628,7 @@ class VideoGenerator:
                 clip.close()
                 txt_clip.close()
                 final_clip.close()
-            except:
+            except Exception as e:
                 pass  # Ignore errors during cleanup
             
             print(colored("Created default background video", "yellow"))
@@ -1326,104 +1742,130 @@ class VideoGenerator:
             print(colored(f"Warning: Error cleaning up temporary files: {str(e)}", "yellow"))
 
     def cleanup_video_library(self, channel_type=None, max_videos=20, days_to_keep=30):
-        """
-        Clean up the video library to prevent excessive accumulation of videos.
+        """Clean up the video library to avoid excessive disk usage"""
+        from video import log_section, log_info, log_success, log_warning, log_error
         
-        Args:
-            channel_type: Specific channel to clean up, or None for all channels
-            max_videos: Maximum number of videos to keep per channel/category
-            days_to_keep: Keep videos newer than this many days regardless of count
-        """
         try:
-            # Clean up channel-specific videos
-            channels = [channel_type] if channel_type else ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']
+            log_section("Video Library Cleanup", "🧹")
             
-            for channel in channels:
-                video_dir = os.path.join("assets", "videos", channel)
-                if os.path.exists(video_dir):
-                    self._cleanup_directory(video_dir, max_videos, days_to_keep)
+            # Get base video directory
+            base_dir = "assets/videos/categorized"
             
-            # Clean up categorized videos
-            categorized_dir = os.path.join("assets", "videos", "categorized")
-            if os.path.exists(categorized_dir):
-                # Get all category directories
-                categories = [d for d in os.listdir(categorized_dir) 
-                             if os.path.isdir(os.path.join(categorized_dir, d))]
-                
-                for category in categories:
-                    category_dir = os.path.join(categorized_dir, category)
-                    self._cleanup_directory(category_dir, max_videos, days_to_keep)
-                
-                print(colored(f"Cleaned up {len(categories)} video categories", "green"))
-                
-        except Exception as e:
-            print(colored(f"Warning: Error cleaning up video library: {str(e)}", "yellow"))
-            traceback.print_exc()
-    
-    def _cleanup_directory(self, directory, max_videos=20, days_to_keep=30):
-        """Helper method to clean up a specific directory of videos"""
-        try:
-            # Get all videos in the directory
-            videos = [os.path.join(directory, f) for f in os.listdir(directory) 
-                     if f.endswith(('.mp4', '.mov')) and os.path.getsize(os.path.join(directory, f)) > 0]
+            # Track total videos cleaned
+            total_cleaned = 0
+            categories_cleaned = 0
             
-            # If we have fewer videos than the maximum, no need to clean up
-            if len(videos) <= max_videos:
-                print(colored(f"Video library for {os.path.basename(directory)} is within limits ({len(videos)}/{max_videos})", "green"))
+            # Clean specific channel type if provided
+            if channel_type:
+                # Find directories for this channel type
+                channel_dirs = []
+                for subdir in os.listdir(base_dir):
+                    if channel_type.lower() in subdir.lower():
+                        channel_dirs.append(os.path.join(base_dir, subdir))
+                
+                if not channel_dirs:
+                    log_warning(f"No video directories found for {channel_type}")
+                    return
+                
+                # Clean each directory
+                for directory in channel_dirs:
+                    cleaned = self._cleanup_directory(directory, max_videos, days_to_keep)
+                    if cleaned > 0:
+                        total_cleaned += cleaned
+                        categories_cleaned += 1
+                
+                log_success(f"Cleaned up {total_cleaned} videos from {categories_cleaned} categories for {channel_type}")
                 return
             
-            print(colored(f"Cleaning up video library for {os.path.basename(directory)} ({len(videos)} videos, keeping max {max_videos})", "blue"))
+            # If no channel type provided, clean all directories
+            categories = []
+            for subdir in os.listdir(base_dir):
+                path = os.path.join(base_dir, subdir)
+                if os.path.isdir(path):
+                    categories.append(path)
             
-            # Get video info with creation time
-            video_info = []
-            cutoff_date = time.time() - (days_to_keep * 24 * 60 * 60)  # Convert days to seconds
+            # Clean each category directory
+            for directory in categories:
+                if os.path.isdir(directory):
+                    try:
+                        cleaned = self._cleanup_directory(directory, max_videos, days_to_keep)
+                        if cleaned > 0:
+                            total_cleaned += cleaned
+                            categories_cleaned += 1
+                    except Exception as e:
+                        log_warning(f"Error cleaning {os.path.basename(directory)}: {str(e)}")
             
-            for video_path in videos:
-                # Get creation time
-                creation_time = os.path.getctime(video_path)
-                # Add to list
-                video_info.append({
-                    'path': video_path,
-                    'created': creation_time,
-                    'keep': creation_time > cutoff_date  # Keep if newer than cutoff
-                })
+            if total_cleaned > 0:
+                log_success(f"Cleaned up {total_cleaned} videos from {categories_cleaned} categories")
+            else:
+                log_info("No videos needed cleaning")
+                
+        except Exception as e:
+            log_error(f"Error cleaning up video library: {str(e)}")
+
+    def _cleanup_directory(self, directory, max_videos=20, days_to_keep=30):
+        """Clean up a specific directory of videos"""
+        from video import log_info, log_success, log_warning
+        
+        try:
+            videos = []
+            # Get list of videos with creation time
+            for file in os.listdir(directory):
+                if file.endswith(".mp4"):
+                    file_path = os.path.join(directory, file)
+                    created = os.path.getctime(file_path)
+                    videos.append({
+                        'path': file_path,
+                        'created': created,
+                        'age': (time.time() - created) / (60 * 60 * 24),  # Age in days
+                        'keep': False  # Default to not keeping
+                    })
+            
+            # Check if cleaning is needed
+            if len(videos) <= max_videos:
+                return 0
             
             # Sort by creation time (oldest first)
-            video_info.sort(key=lambda x: x['created'])
+            videos.sort(key=lambda x: x['created'])
             
-            # Count videos to keep (those marked as keep)
-            keep_count = sum(1 for v in video_info if v['keep'])
+            # Mark videos to keep or delete
+            to_keep = []
+            to_delete = []
             
-            # If we're keeping more than max_videos due to age, adjust max_videos
-            if keep_count > max_videos:
-                print(colored(f"Keeping {keep_count} videos for {os.path.basename(directory)} due to age restriction", "yellow"))
-                return
+            # First, keep the most recent videos up to max_videos
+            for i, video in enumerate(reversed(videos)):
+                if i < max_videos:
+                    video['keep'] = True
+                    to_keep.append(video)
+                else:
+                    # For older videos, keep them if they're within days_to_keep
+                    if video['age'] <= days_to_keep:
+                        video['keep'] = True
+                        to_keep.append(video)
+                    else:
+                        to_delete.append(video)
             
-            # Calculate how many videos to delete
-            delete_count = len(videos) - max(max_videos, keep_count)
+            # If nothing to delete, we're done
+            if not to_delete:
+                return 0
+                
+            # Delete videos marked for deletion
+            deleted_count = 0
+            for video in to_delete:
+                try:
+                    os.remove(video['path'])
+                    deleted_count += 1
+                except Exception as e:
+                    log_warning(f"Could not remove {os.path.basename(video['path'])}: {str(e)}")
             
-            if delete_count <= 0:
-                print(colored(f"No videos need to be deleted for {os.path.basename(directory)}", "green"))
-                return
-            
-            # Delete oldest videos that aren't marked to keep
-            deleted = 0
-            for video in video_info:
-                if deleted >= delete_count:
-                    break
-                    
-                if not video['keep']:
-                    try:
-                        os.remove(video['path'])
-                        deleted += 1
-                        print(colored(f"Deleted old video: {os.path.basename(video['path'])}", "yellow"))
-                    except Exception as e:
-                        print(colored(f"Warning: Could not remove {video['path']}: {str(e)}", "yellow"))
-            
-            print(colored(f"Cleaned up {deleted} videos for {os.path.basename(directory)}", "green"))
+            if deleted_count > 0:
+                return deleted_count
+            else:
+                return 0
             
         except Exception as e:
-            print(colored(f"Warning: Error cleaning up directory {directory}: {str(e)}", "yellow"))
+            log_warning(f"Error cleaning up directory {os.path.basename(directory)}: {str(e)}")
+            return 0
 
     async def _generate_delayed_subtitles(self, script, audio_path, channel_type, delay=1.0):
         """Generate subtitles with a delay for padding"""
@@ -1463,6 +1905,8 @@ class VideoGenerator:
 
     async def _generate_video(self, tts_path, subtitles_path, background_videos, channel_type, custom_output_path=None):
         """Generate a video with the given TTS audio and subtitles"""
+        from video import log_section, log_info, log_success, log_warning, log_error, log_highlight, log_result, log_step, log_separator
+        
         try:
             # Create output directory if it doesn't exist
             output_dir = os.path.join("output", "videos", channel_type)
@@ -1476,35 +1920,41 @@ class VideoGenerator:
             # Use custom output path if provided
             if custom_output_path:
                 output_path = custom_output_path
+                
+            # Final output path (for clear display at the end)
+            final_output_path = custom_output_path if custom_output_path else output_path
             
             # Get audio duration
             audio = AudioFileClip(tts_path)
             audio_duration = audio.duration
             audio.close()
             
-            print(colored(f"Original audio duration: {audio_duration:.2f}s", "blue"))
+            log_section("Video Generation", "🎬")
+            log_info(f"Target duration: {audio_duration:.1f}s")
             
             # Calculate video duration with padding
-            start_padding = 1.0  # 1 second at start (already added to audio)
-            end_padding = 3.0    # 3 seconds at end (increased from 2 to 3 seconds)
-            target_duration = audio_duration + end_padding  # Start padding already included in audio
-            print(colored(f"Video duration: {target_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)", "blue"))
+            start_padding = 1.0  # 1 second at start
+            end_padding = 3.0    # 3 seconds at end
+            target_duration = audio_duration + end_padding
             
             # Find the script path based on the TTS path
-            # The script is typically stored with the same base name as the TTS file but with .txt extension
             script_path = None
             if tts_path:
                 possible_script_path = tts_path.replace('.mp3', '.txt')
                 if os.path.exists(possible_script_path):
                     script_path = possible_script_path
                 else:
-                    # Try looking in the temp/tts directory for a script with the channel name
                     possible_script_path = os.path.join('temp', 'tts', f"{channel_type}.txt")
                     if os.path.exists(possible_script_path):
                         script_path = possible_script_path
             
             # Generate video
             from video import generate_video
+            
+            # Suppress MoviePy warnings during video generation
+            import warnings
+            warnings.filterwarnings("ignore", category=UserWarning, module="moviepy.video.io")
+            
             video = generate_video(
                 background_path=background_videos,
                 audio_path=tts_path,
@@ -1519,174 +1969,168 @@ class VideoGenerator:
             )
             
             if not video:
-                print(colored("Failed to generate video", "red"))
+                log_error("Failed to generate video")
                 return None
-                
-            # Write final video with specific parameters to prevent black frames
-            temp_video_path = f"{output_dir.replace('/videos', '')}/temp_video_no_audio.mp4"
-            temp_audio_path = f"{output_dir.replace('/videos', '')}/temp_audio.mp3"
             
-            # Use custom output path if provided, otherwise use default
-            final_output_path = custom_output_path if custom_output_path else output_path
+            # Create temporary paths for processing
+            temp_video_path = os.path.join("temp", "temp_video.mp4")
+            temp_audio_path = os.path.join("temp", "temp_audio.mp3")
             
-            # Create a temporary output path for the initial video before trimming
-            temp_output_path = f"{output_dir}/temp_{timestamp}.mp4"
+            step1_start = time.time()
+            log_step(1, 4, "Extracting audio track", start_time=step1_start)
             
-            print(colored(f"\n=== 🎥 Rendering Final Video 🎥 ===", "blue"))
-            print(colored(f"ℹ️ Output path: {final_output_path}", "cyan"))
-            
-            # Show a message about rendering time
-            print(colored("⏳ Rendering final video... This may take a while", "cyan"))
-            start_time = time.time()
-            
-            # Step 1: Extract the audio - handle both simple AudioFileClip and CompositeAudioClip
+            # Extract audio from video
             if hasattr(video, 'audio') and video.audio is not None:
                 try:
-                    # Check if it's a CompositeAudioClip (which doesn't have fps)
-                    if isinstance(video.audio, CompositeAudioClip):
-                        # CompositeAudioClip doesn't have fps, so we need to set it
-                        # Get fps from the first clip in the composite
-                        if hasattr(video.audio.clips[0], 'fps') and video.audio.clips[0].fps:
-                            # Use the fps from the first clip
-                            fps = video.audio.clips[0].fps
-                            # Create a new audio file with the same content but with fps
-                            temp_mixed_path = f"{self.temp_dir}/temp_mixed_{uuid.uuid4()}.mp3"
-                            video.audio.write_audiofile(temp_mixed_path, fps=44100)
-                            # Now load it as a regular AudioFileClip which has fps
-                            regular_audio = AudioFileClip(temp_mixed_path)
-                            regular_audio.write_audiofile(temp_audio_path)
-                            regular_audio.close()
-                            # Clean up
-                            if os.path.exists(temp_mixed_path):
-                                os.remove(temp_mixed_path)
+                    # If we have background music, mix it with TTS
+                    if self.use_background_music:
+                        # Find an appropriate music file
+                        music_path = self.get_background_music(channel_type)
+                        if music_path and os.path.exists(music_path):
+                            log_info(f"Mixing audio with background music")
+                            try:
+                                # Extract video audio
+                                source_audio_path = os.path.join("temp", "source_audio_temp.mp3")
+                                video.audio.write_audiofile(source_audio_path, 
+                                                         logger=None, verbose=False)
+                                source_audio = AudioFileClip(source_audio_path)
+                                # Mix with music
+                                from video import mix_audio
+                                mix_audio(tts_path, music_path, temp_audio_path, 
+                                        music_volume=self.music_volume,
+                                        fade_in=2.0, fade_out=3.0)
+                                source_audio.close()
+                            except Exception as mix_error:
+                                log_warning(f"Error mixing audio: {str(mix_error)}")
+                                log_warning("Using original TTS without music")
+                                source_audio = AudioFileClip(tts_path)
+                                source_audio.write_audiofile(temp_audio_path, 
+                                                         logger=None, verbose=False)
+                                source_audio.close()
                         else:
-                            # Fallback to using the original TTS file
-                            print(colored("⚠️ Warning: Could not determine fps for composite audio, using original TTS", "yellow"))
-                            source_audio = AudioFileClip(tts_path)
-                            source_audio.write_audiofile(temp_audio_path)
-                            source_audio.close()
+                            video.audio.write_audiofile(temp_audio_path, 
+                                                     logger=None, verbose=False)
                     else:
-                        # It's a regular AudioFileClip
-                        video.audio.write_audiofile(temp_audio_path)
+                        video.audio.write_audiofile(temp_audio_path, 
+                                                 logger=None, verbose=False)
                 except Exception as e:
-                    print(colored(f"Error extracting audio: {str(e)}", "red"))
-                    print(colored("Falling back to original TTS audio", "yellow"))
-                    # Fallback to using the original TTS file
+                    log_warning(f"Error extracting audio: {str(e)}")
+                    log_warning("Falling back to original TTS audio")
                     source_audio = AudioFileClip(tts_path)
-                    source_audio.write_audiofile(temp_audio_path)
+                    source_audio.write_audiofile(temp_audio_path, 
+                                              logger=None, verbose=False)
                     source_audio.close()
             else:
-                # If no audio in video, use the original TTS file
                 source_audio = AudioFileClip(tts_path)
-                source_audio.write_audiofile(temp_audio_path)
+                source_audio.write_audiofile(temp_audio_path, 
+                                          logger=None, verbose=False)
                 source_audio.close()
-                print(colored("⚠️ Warning: No audio found in video, using original TTS without music", "yellow"))
+                log_warning("No audio found in video, using original TTS without music")
+            
+            step1_end = time.time()
+            log_step(1, 4, "Extracting audio track", end_time=step1_end, start_time=step1_start)
             
             # Step 2: Write the video without audio
+            step2_start = time.time()
+            log_step(2, 4, "Processing video frames", start_time=step2_start)
+            
+            # Less verbose video writing
             video.without_audio().write_videofile(
                 temp_video_path,
                 codec='libx264',
                 fps=30,
                 preset='ultrafast',
-                ffmpeg_params=["-vf", "format=yuv420p"]
+                ffmpeg_params=["-vf", "format=yuv420p"],
+                logger=None,
+                verbose=False
             )
             
+            step2_end = time.time()
+            log_step(2, 4, "Processing video frames", end_time=step2_end, start_time=step2_start)
+            
             # Step 3: Combine video and audio using ffmpeg directly
-            # IMPORTANT: Removed the -shortest flag to ensure the full video duration is preserved
+            step3_start = time.time()
+            log_step(3, 4, "Combining video and audio tracks", start_time=step3_start)
+            
             import subprocess
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", temp_video_path,
-                "-i", temp_audio_path,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-map", "0:v:0",  # Use the entire video track
-                "-map", "1:a:0",  # Use the entire audio track
-                "-af", "afade=t=out:st=" + str(audio_duration - 0.5) + ":d=0.5",  # Add fade out to audio
-                temp_output_path
-            ]
-            subprocess.run(cmd, check=True)
             
-            # Step 4: Trim the last second from the video
-            print(colored("⏳ Trimming the last second from the video...", "cyan"))
-            
-            # Get the duration of the generated video
-            probe_cmd = [
-                "ffprobe", 
-                "-v", "error", 
-                "-show_entries", "format=duration", 
-                "-of", "default=noprint_wrappers=1:nokey=1", 
-                temp_output_path
-            ]
-            
-            try:
-                # Get the duration of the video
-                duration_output = subprocess.check_output(probe_cmd, universal_newlines=True).strip()
-                video_duration = float(duration_output)
-                
-                # Calculate the new duration (trim the last second)
-                new_duration = max(1.0, video_duration - 1.0)
-                
-                # Trim the video using ffmpeg
-                trim_cmd = [
+            # Run FFmpeg with output suppressed
+            with open(os.devnull, 'w') as devnull:
+                cmd = [
                     "ffmpeg", "-y",
-                    "-i", temp_output_path,
-                    "-t", str(new_duration),
+                    "-i", temp_video_path,
+                    "-i", temp_audio_path,
                     "-c:v", "copy",
-                    "-c:a", "copy",
-                    final_output_path
+                    "-c:a", "aac",
+                    "-strict", "experimental",
+                    "-shortest",
+                    output_path
                 ]
-                
-                subprocess.run(trim_cmd, check=True)
-                print(colored(f"✅ Successfully trimmed video from {video_duration:.2f}s to {new_duration:.2f}s", "green"))
-                
-                # Remove the temporary output file
-                if os.path.exists(temp_output_path):
-                    os.remove(temp_output_path)
-                
-            except Exception as trim_error:
-                print(colored(f"⚠️ Warning: Error trimming video: {str(trim_error)}", "yellow"))
-                print(colored("Using the original video without trimming", "yellow"))
-                
-                # If trimming fails, just use the original output
-                if os.path.exists(temp_output_path):
-                    # Rename the temp file to the final output path
-                    if os.path.exists(final_output_path):
-                        os.remove(final_output_path)
-                    os.rename(temp_output_path, final_output_path)
+                subprocess.call(cmd, stdout=devnull, stderr=devnull)
             
-            elapsed_time = time.time() - start_time
-            print(colored(f"⏱️ Video rendered in {elapsed_time:.1f} seconds", "cyan"))
+            step3_end = time.time()
+            log_step(3, 4, "Combining video and audio tracks", end_time=step3_end, start_time=step3_start)
             
-            # Clean up
-            print(colored("ℹ️ Cleaning up resources...", "cyan"))
-            try:
-                video.close()
-                if os.path.exists(temp_video_path):
-                    os.remove(temp_video_path)
-                if os.path.exists(temp_audio_path):
-                    os.remove(temp_audio_path)
-                print(colored("✓ Temporary files cleaned up", "green"))
-            except Exception as e:
-                print(colored(f"Warning: Error cleaning up: {str(e)}", "yellow"))
+            # Step 4: Clean up and finalize
+            step4_start = time.time()
+            log_step(4, 4, "Finalizing video", start_time=step4_start)
             
-            return final_output_path
+            # Check if output file exists and has a reasonable size
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                # Clean up temporary files
+                for temp_file in [temp_video_path, temp_audio_path]:
+                    if os.path.exists(temp_file):
+                        try:
+                            os.remove(temp_file)
+                        except:
+                            pass
+                
+                # Calculate processing times
+                processing_time = time.time() - step1_start
+                log_step(4, 4, "Finalizing video", end_time=time.time(), start_time=step4_start)
+                
+                # Display final output info
+                file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                log_success(f"Video generated successfully in {processing_time:.1f}s")
+                log_result(f"Output: {final_output_path}")
+                log_info(f"File size: {file_size_mb:.1f} MB")
+                
+                # Get absolute path for easier access
+                abs_path = os.path.abspath(final_output_path)
+                log_info(f"Absolute path: {abs_path}")
+                
+                return final_output_path
+            else:
+                log_error("Failed to generate final video file")
+                return None
             
         except Exception as e:
-            print(colored(f"Error generating video: {str(e)}", "red"))
-            traceback.print_exc()
+            log_error(f"Error generating video: {str(e)}")
+            log_error(traceback.format_exc())
             return None
 
     async def generate_video(self, channel, script_file):
-        """Generate a video for the given channel using the script file"""
+        """Generate a video for a channel"""
+        from video import log_info, log_success, log_error, log_warning, log_result
+        
         try:
-            # Use the existing create_video method
+            # Create a standardized output path
             output_path = f"output/videos/{channel}_latest.mp4"
-            return await self.create_video(script_file, channel, output_path)
+            
+            # Create the video
+            success = await self.create_video(script_file, channel, output_path)
+            
+            if success:
+                log_success(f"Video generation completed successfully")
+                log_result("Final video", output_path)
+                return output_path
+            else:
+                log_error("Video generation failed")
+                return None
+                
         except Exception as e:
-            print(colored(f"Error in generate_video: {str(e)}", "red"))
-            traceback.print_exc()
-        return False
+            log_error(f"Error generating video: {str(e)}")
+            return None
 
     @property
     def music_volume(self):

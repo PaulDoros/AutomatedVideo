@@ -16,13 +16,15 @@ import random
 import nltk
 from joke_provider import JokeProvider
 from content_learning_system import ContentLearningSystem
+from video import log_section, log_info, log_success, log_warning, log_error, log_step, log_highlight, log_result, log_separator
+import time
 
 # Download wordnet if not already downloaded
 nltk.download('wordnet')
 
 async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload=False):
     """Generate content for a specific channel"""
-    print(colored(f"\n=== Generating content for {channel_type} ===", "blue"))
+    log_section(f"Generating Content for {channel_type}", "🎬")
     
     # Initialize components
     script_gen = ScriptGenerator()
@@ -34,26 +36,26 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
     
     # Set music volume for better audibility
     video_gen.music_volume = music_volume
-    print(colored(f"Setting music volume to: {video_gen.music_volume} for better audibility", "cyan"))
+    log_info(f"Music volume set to: {video_gen.music_volume}", "🎵")
     
     # Check if topic is a duplicate using both systems
     is_duplicate = False
     if topic:
         # Check with content monitor
         if content_monitor.is_topic_duplicate(channel_type, topic):
-            print(colored(f"✗ Topic '{topic}' is a duplicate for {channel_type}", "yellow"))
+            log_warning(f"Topic '{topic}' is a duplicate for {channel_type}")
             is_duplicate = True
         
         # Check with learning system
         is_repetitive, details = learning_system.is_content_repetitive(channel_type, topic)
         if is_repetitive:
-            print(colored(f"✗ Topic '{topic}' is too similar to recent content: {details['message']}", "yellow"))
+            log_warning(f"Topic '{topic}' is too similar to recent content: {details['message']}")
             is_duplicate = True
         
         # Check if blacklisted
         is_blacklisted, reason = learning_system.is_content_blacklisted(channel_type, topic)
         if is_blacklisted:
-            print(colored(f"✗ Topic '{topic}' is blacklisted: {reason}", "yellow"))
+            log_warning(f"Topic '{topic}' is blacklisted: {reason}")
             is_duplicate = True
         
         if is_duplicate:
@@ -61,7 +63,7 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
             suggestion = content_monitor.suggest_alternative_topic(channel_type, topic)
             
             if suggestion:
-                print(colored(f"Suggestion: {suggestion}", "cyan"))
+                log_info(f"Suggestion: {suggestion}", "💡")
                 
                 # Extract alternative topic from suggestion
                 alt_topic = suggestion.split("Try '")[1].split("'")[0]
@@ -70,13 +72,13 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
                 # Get content suggestions from learning system
                 content_suggestions = learning_system.get_content_suggestions(channel_type, topic)
                 if content_suggestions:
-                    print(colored("Additional suggestions from learning system:", "cyan"))
+                    log_info("Content suggestions from learning system:", "📊")
                     for i, suggestion in enumerate(content_suggestions[:3], 1):
-                        print(colored(f"  {i}. {suggestion['message']}", "cyan"))
+                        log_info(f"  {i}. {suggestion['message']}")
             
     # For tech_humor channel, use JokeProvider
     if channel_type == 'tech_humor':
-        print(colored(f"Using JokeProvider for {channel_type} channel...", "cyan"))
+        log_info(f"Using JokeProvider for {channel_type} channel...", "🎭")
         joke_provider = JokeProvider()
         
         # Get a joke
@@ -87,36 +89,36 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
         with open(f"cache/scripts/{channel_type}_latest.txt", "w", encoding="utf-8") as f:
             f.write(joke)
         
-        print(colored("✓ Joke selected and saved", "green"))
+        log_success("Joke selected and saved")
         
         # Validate joke
         is_valid, analysis = content_validator.validate_script(joke, channel_type)
         
         if not is_valid:
-            print(colored(f"✗ Joke validation failed: {analysis['message']}", "red"))
+            log_error(f"Joke validation failed: {analysis['message']}")
             return None
         
-        print(colored("✓ Script generated", "green"))
+        log_success("Script generated")
         
         # Generate video
-        print(colored("\nGenerating video...", "blue"))
+        log_section("Generating Video", "🎥")
         video_path = await video_gen.generate_video(channel_type, f"cache/scripts/{channel_type}_latest.txt")
         
         if not video_path:
-            print(colored("✗ Video generation failed", "red"))
+            log_error("Video generation failed")
             return None
         
-        print(colored("✓ Video generated", "green"))
+        log_success("Video generated")
         
         # Generate thumbnail
-        print(colored("\nGenerating thumbnail...", "blue"))
+        log_section("Generating Thumbnail", "🖼️")
         thumbnail_path = thumb_gen.generate_thumbnail(channel_type, joke)
         
         if not thumbnail_path:
-            print(colored("✗ Thumbnail generation failed", "red"))
+            log_error("Thumbnail generation failed")
             return None
         
-        print(colored("✓ Thumbnail generated", "green"))
+        log_success("Thumbnail generated")
         
         # Return video details
         return {
@@ -134,25 +136,26 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
         # Get content suggestions from learning system
         content_suggestions = learning_system.get_content_suggestions(channel_type, topic)
         if content_suggestions:
-            print(colored("Content suggestions from learning system:", "cyan"))
+            log_info("Content suggestions from learning system:", "📊")
             for i, suggestion in enumerate(content_suggestions[:3], 1):
-                print(colored(f"  {i}. {suggestion['message']}", "cyan"))
+                log_info(f"  {i}. {suggestion['message']}")
         
         # Generate script
+        log_section("Generating Script", "📝")
         is_valid, script = await script_gen.generate_script(topic, channel_type)
         
         if not is_valid or not script:
-            print(colored("✗ Script generation failed", "red"))
+            log_error("Script generation failed")
             
             # Check if script is repetitive or blacklisted
             if script:
                 is_repetitive, details = learning_system.is_content_repetitive(channel_type, script)
                 if is_repetitive:
-                    print(colored(f"✗ Generated script is too similar to recent content: {details['message']}", "yellow"))
+                    log_warning(f"Generated script is too similar to recent content: {details['message']}")
                 
                 is_blacklisted, reason = learning_system.is_content_blacklisted(channel_type, script)
                 if is_blacklisted:
-                    print(colored(f"✗ Generated script is blacklisted: {reason}", "yellow"))
+                    log_warning(f"Generated script is blacklisted: {reason}")
             
             return None
         
@@ -161,27 +164,27 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
         with open(f"cache/scripts/{channel_type}_latest.txt", "w", encoding="utf-8") as f:
             f.write(script)
         
-        print(colored("✓ Script generated and saved", "green"))
+        log_success("Script generated and saved")
         
         # Generate video
-        print(colored("\nGenerating video...", "blue"))
+        log_section("Generating Video", "🎥")
         video_path = await video_gen.generate_video(channel_type, f"cache/scripts/{channel_type}_latest.txt")
         
         if not video_path:
-            print(colored("✗ Video generation failed", "red"))
+            log_error("Video generation failed")
             return None
         
-        print(colored("✓ Video generated", "green"))
+        log_success("Video generated")
         
         # Generate thumbnail
-        print(colored("\nGenerating thumbnail...", "blue"))
+        log_section("Generating Thumbnail", "🖼️")
         thumbnail_path = thumb_gen.generate_thumbnail(channel_type, script)
         
         if not thumbnail_path:
-            print(colored("✗ Thumbnail generation failed", "red"))
+            log_error("Thumbnail generation failed")
             return None
         
-        print(colored("✓ Thumbnail generated", "green"))
+        log_success("Thumbnail generated")
         
         # Extract title from script (first line)
         title = script.split('\n')[0]
@@ -206,7 +209,7 @@ async def upload_content(video_details, schedule_id=None):
     file_path = video_details['video_path']
     topic = video_details['topic']
     
-    print(colored(f"\n=== Uploading content for {channel_type} ===", "blue"))
+    print(colored(f"\n=== 📤 Uploading Content for {channel_type} ===", "blue"))
     
     # Initialize uploader
     uploader = YouTubeUploader()
@@ -222,15 +225,15 @@ async def upload_content(video_details, schedule_id=None):
                     cached = f.read()
                     thumbnail_title = cached.split('\n')[0]
                     if thumbnail_title:
-                        print(colored(f"Using thumbnail title as video title: {thumbnail_title}", "cyan"))
+                        print(colored(f"📝 Using thumbnail title: {thumbnail_title}", "cyan"))
             except Exception as e:
-                print(colored(f"Warning: Could not load thumbnail title from cache: {str(e)}", "yellow"))
+                print(colored(f"⚠️ Warning: Could not load thumbnail title from cache: {str(e)}", "yellow"))
         
         # Use thumbnail title if available, otherwise use topic
         video_title = thumbnail_title if thumbnail_title else topic
         
         # Upload to YouTube
-        print(colored("\nUploading to YouTube...", "blue"))
+        print(colored("\n=== 📤 Uploading to YouTube ===", "blue"))
         success, result = await uploader.upload_video(
             channel_type=channel_type,
             video_path=file_path,
@@ -241,7 +244,7 @@ async def upload_content(video_details, schedule_id=None):
         
         if success:
             print(colored(f"✓ Upload complete for {channel_type}", "green"))
-            print(colored(f"Video ID: {result}", "cyan"))
+            print(colored(f"🎥 Video ID: {result}", "cyan"))
             
             # If this is a scheduled upload, update the schedule
             if schedule_id:
@@ -250,7 +253,7 @@ async def upload_content(video_details, schedule_id=None):
             
             return True, result
         else:
-            print(colored(f"✗ Upload failed for {channel_type}: {result}", "red"))
+            print(colored(f"❌ Upload failed for {channel_type}: {result}", "red"))
             
             # If this is a scheduled upload, update the schedule
             if schedule_id:
@@ -260,7 +263,7 @@ async def upload_content(video_details, schedule_id=None):
             
     except Exception as e:
         error_msg = f"Error uploading content for {channel_type}: {str(e)}"
-        print(colored(f"✗ {error_msg}", "red"))
+        print(colored(f"❌ {error_msg}", "red"))
         
         # If this is a scheduled upload, update the schedule
         if schedule_id:
@@ -270,7 +273,7 @@ async def upload_content(video_details, schedule_id=None):
 
 async def process_scheduled_uploads(hours=1):
     """Process scheduled uploads for the next X hours"""
-    print(colored(f"\n=== Processing scheduled uploads for next {hours} hours ===", "blue"))
+    print(colored(f"\n=== ⏰ Processing Scheduled Uploads for Next {hours} Hours ===", "blue"))
     
     # Initialize components
     scheduler = VideoScheduler()
@@ -280,7 +283,7 @@ async def process_scheduled_uploads(hours=1):
     upcoming = scheduler.get_upcoming_schedule(hours)
     
     if not upcoming:
-        print(colored("No upcoming scheduled uploads", "yellow"))
+        print(colored("ℹ️ No upcoming scheduled uploads", "yellow"))
         return []
     
     results = []
@@ -291,18 +294,18 @@ async def process_scheduled_uploads(hours=1):
         scheduled_time = schedule['scheduled_time']
         status = schedule['status']
         
-        print(colored(f"\nProcessing schedule: {channel_type} at {scheduled_time} (Status: {status})", "blue"))
+        print(colored(f"\n=== 📅 Processing Schedule: {channel_type} at {scheduled_time} (Status: {status}) ===", "blue"))
         
         # Skip if not pending
         if status != 'pending':
-            print(colored(f"Skipping: Status is {status}", "yellow"))
+            print(colored(f"⏭️ Skipping: Status is {status}", "yellow"))
             continue
         
         # Generate content
         video_details = await generate_content(channel_type)
         
         if not video_details:
-            print(colored(f"✗ Failed to generate content for {channel_type}", "red"))
+            print(colored(f"❌ Failed to generate content for {channel_type}", "red"))
             db.update_schedule_status(schedule_id, 'failed')
             
             results.append({
@@ -329,12 +332,12 @@ async def process_scheduled_uploads(hours=1):
             'message': result if not success else "Upload successful"
         })
     
-    print(colored(f"\n=== Completed processing {len(results)} scheduled uploads ===", "green"))
+    print(colored(f"\n=== ✅ Completed Processing {len(results)} Scheduled Uploads ===", "green"))
     return results
 
 async def analyze_performance():
     """Analyze performance of all channels"""
-    print(colored("\n=== Analyzing channel performance ===", "blue"))
+    print(colored("\n=== 📊 Analyzing Channel Performance ===", "blue"))
     
     # Initialize analyzer
     analyzer = PerformanceAnalyzer()
@@ -349,24 +352,24 @@ async def analyze_performance():
     await learning_system.update_all_performance_data()
     
     if report_files:
-        print(colored("\nGenerated performance reports:", "green"))
+        print(colored("\n📈 Generated performance reports:", "green"))
         for report_file in report_files:
             print(colored(f"- {report_file}", "cyan"))
     else:
-        print(colored("\nNo performance reports generated", "yellow"))
+        print(colored("\nℹ️ No performance reports generated", "yellow"))
     
     # Calculate content diversity scores
-    print(colored("\nContent diversity analysis:", "blue"))
+    print(colored("\n📊 Content diversity analysis:", "blue"))
     for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
         diversity_score = learning_system.get_content_diversity_score(channel)
         print(colored(f"- {channel}: {diversity_score:.2f}/1.0", "cyan"))
     
-    print(colored("\n=== Performance analysis complete ===", "green"))
+    print(colored("\n=== ✅ Performance Analysis Complete ===", "green"))
     return report_files
 
 async def monitor_content():
     """Monitor content across all channels"""
-    print(colored("\n=== Monitoring channel content ===", "blue"))
+    print(colored("\n=== 👀 Monitoring Channel Content ===", "blue"))
     
     # Initialize monitor
     monitor = ContentMonitor()
@@ -378,21 +381,21 @@ async def monitor_content():
     await monitor.store_all_channel_videos()
     
     # Analyze channel content with learning system
-    print(colored("\nAnalyzing content patterns:", "blue"))
+    print(colored("\n📊 Analyzing content patterns:", "blue"))
     for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
         analysis = learning_system.analyze_channel_content(channel)
         if analysis['status'] == 'success':
-            print(colored(f"\n{channel} content analysis:", "cyan"))
+            print(colored(f"\n📈 {channel} content analysis:", "cyan"))
             print(colored(f"- Video count: {analysis['video_count']}", "cyan"))
             print(colored(f"- Average views: {analysis['avg_metrics']['views']:.0f}", "cyan"))
             print(colored(f"- Content clusters: {len(analysis['content_clusters'])}", "cyan"))
             print(colored(f"- Top keywords: {', '.join([kw for kw, _ in analysis['top_keywords'][:5]])}", "cyan"))
     
-    print(colored("\n=== Content monitoring complete ===", "green"))
+    print(colored("\n=== ✅ Content Monitoring Complete ===", "green"))
 
 async def generate_schedule(days=7):
     """Generate a posting schedule for all channels"""
-    print(colored(f"\n=== Generating posting schedule for {days} days ===", "blue"))
+    print(colored(f"\n=== 📅 Generating Posting Schedule for {days} Days ===", "blue"))
     
     # Initialize scheduler
     scheduler = VideoScheduler()
@@ -400,11 +403,12 @@ async def generate_schedule(days=7):
     # Generate schedule
     schedule = scheduler.generate_schedule(days=days)
     
-    print(colored(f"\n=== Generated schedule with {len(schedule)} posting times ===", "green"))
+    print(colored(f"\n=== ✅ Generated Schedule with {len(schedule)} Posting Times ===", "green"))
     return schedule
 
 async def generate_and_upload(music_volume=0.3, no_upload=False):
     """Generate and upload content for all channels"""
+    from video import log_section, log_info, log_success, log_warning, log_error, log_result, log_highlight, log_separator
     
     # Create necessary directories
     os.makedirs("output/videos", exist_ok=True)
@@ -413,6 +417,9 @@ async def generate_and_upload(music_volume=0.3, no_upload=False):
     
     # Initialize learning system
     learning_system = ContentLearningSystem()
+    
+    # Store generated video paths for final summary
+    generated_videos = []
     
     # Channel topics
     topics = {
@@ -430,18 +437,29 @@ async def generate_and_upload(music_volume=0.3, no_upload=False):
             # Find a high-performing suggestion
             for suggestion in suggestions:
                 if suggestion['type'] == 'content' and suggestion.get('score', 0) > 0.7:
-                    print(colored(f"Using high-performing topic for {channel} based on learning system", "cyan"))
+                    log_info(f"Using high-performing topic for {channel} based on learning system: {suggestion['title']}", "💡")
                     topics[channel] = suggestion['title']
                     break
     
     for channel, topic in topics.items():
-        print(colored(f"\n=== Processing {channel}: {topic} ===", "blue"))
+        log_section(f"Processing {channel}: {topic}", "🎬")
         
         # Generate content
         video_details = await generate_content(channel, topic, music_volume, no_upload)
         
         if not video_details:
+            log_warning(f"Content generation failed for {channel}")
             continue
+        
+        # Track successful videos
+        if 'video_path' in video_details and os.path.exists(video_details['video_path']):
+            generated_videos.append({
+                'channel': channel,
+                'path': video_details['video_path'],
+                'size_mb': os.path.getsize(video_details['video_path']) / (1024 * 1024),
+                'created': os.path.getmtime(video_details['video_path']),
+                'thumbnail': video_details.get('thumbnail_path', '')
+            })
         
         # Upload content if not disabled
         if not no_upload:
@@ -471,9 +489,39 @@ async def generate_and_upload(music_volume=0.3, no_upload=False):
                     joke_provider = JokeProvider()
                     joke_provider.update_joke_performance(video_details['script'], initial_metrics)
         else:
-            print(colored("Skipping upload as requested with --no-upload", "yellow"))
+            log_warning(f"Skipping upload as requested with --no-upload")
         
-        print(colored(f"\n=== Completed {channel} ===", "green"))
+        # Display final output location
+        log_result(f"CONTENT GENERATION COMPLETE FOR {channel.upper()}", video_details['video_path'], "📽️")
+        
+        if 'thumbnail_path' in video_details and video_details['thumbnail_path']:
+            log_info(f"Thumbnail location: {os.path.abspath(video_details['thumbnail_path'])}", "🖼️")
+        
+        log_success(f"Completed {channel}")
+    
+    # Final summary of all generated videos
+    if generated_videos:
+        log_separator()
+        log_highlight("GENERATED VIDEOS SUMMARY")
+        log_separator()
+        
+        for video in generated_videos:
+            # Calculate how recent the video is
+            time_diff = time.time() - video['created']
+            minutes_ago = int(time_diff / 60)
+            
+            # Display in a highly visible format
+            log_result(f"{video['channel'].upper()} VIDEO", os.path.abspath(video['path']), "🎬")
+            print(colored(f"   Size: {video['size_mb']:.1f} MB, Created: {minutes_ago} minutes ago", "cyan"))
+            
+            if video['thumbnail'] and os.path.exists(video['thumbnail']):
+                thumb_size = os.path.getsize(video['thumbnail']) / (1024 * 1024)
+                print(colored(f"   Thumbnail: {os.path.abspath(video['thumbnail'])} ({thumb_size:.1f} MB)", "cyan"))
+        
+        log_separator()
+        log_success(f"Successfully generated {len(generated_videos)} videos")
+    else:
+        log_warning("No videos were successfully generated")
 
 def parse_args():
     """Parse command line arguments"""
@@ -502,7 +550,7 @@ def parse_args():
     return parser.parse_args()
 
 async def main():
-    """Main function"""
+    """Main entry point for the script"""
     args = parse_args()
     
     # Initialize learning system
@@ -544,6 +592,26 @@ async def main():
     for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
         diversity_score = learning_system.get_content_diversity_score(channel)
         print(colored(f"- {channel}: {diversity_score:.2f}/1.0", "cyan"))
+        
+    # Check for recently generated videos and display their paths
+    log_section("FINAL VIDEO OUTPUT SUMMARY", "📋")
+    
+    found_videos = False
+    for channel in ['tech_humor', 'ai_money', 'baby_tips', 'quick_meals', 'fitness_motivation']:
+        video_path = f"output/videos/{channel}_latest.mp4"
+        if os.path.exists(video_path):
+            # Get file creation time to show how recent it is
+            file_time = os.path.getmtime(video_path)
+            time_diff = time.time() - file_time
+            if time_diff < 3600:  # If created within the last hour
+                found_videos = True
+                # Show the absolute path and size
+                size_mb = os.path.getsize(video_path) / (1024 * 1024)
+                log_result(f"{channel.upper()} VIDEO", os.path.abspath(video_path), "🎬")
+                print(colored(f"   Size: {size_mb:.1f} MB, Created: {int(time_diff/60)} minutes ago", "cyan"))
+    
+    if not found_videos:
+        print(colored("No recently generated videos found.", "yellow"))
 
 if __name__ == "__main__":
     asyncio.run(main()) 

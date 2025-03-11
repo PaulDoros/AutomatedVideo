@@ -7,6 +7,7 @@ import os
 import time
 from typing import Tuple
 from datetime import datetime
+from video import log_info, log_warning, log_error, log_success
 
 class ContentValidator:
     def __init__(self):
@@ -31,78 +32,94 @@ class ContentValidator:
         }
 
     def validate_script(self, script, channel_type):
-        """Validate script content and structure"""
+        """
+        Validate the script against the channel standards.
+        Returns a tuple of (is_valid, validation_output)
+        """
         try:
-            # Clean up the script
-            lines = []
-            for line in script.split('\n'):
-                line = line.strip()
-                if line and not line.startswith('['):
-                    lines.append(line)
-
-            # Calculate metrics
-            total_words = sum(len(re.findall(r'\w+', line)) for line in lines)
-            estimated_duration = total_words * 0.4  # 0.4 seconds per word
-
-            # Channel-specific length limits
-            channel_limits = {
-                'tech_humor': {'max_words': 100, 'min_words': 10, 'max_duration': 60, 'max_lines': 10},
-                'ai_money': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15},
-                'baby_tips': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15},
-                'quick_meals': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15},
-                'fitness_motivation': {'max_words': 200, 'min_words': 30, 'max_duration': 90, 'max_lines': 15}
+            if not script or script.strip() == '':
+                log_error("Empty script provided")
+                return False, {"message": "Empty script provided"}
+            
+            # Get channel standards
+            standards = self.get_channel_standards(channel_type)
+            if not standards:
+                log_warning(f"No standards defined for channel type: {channel_type}")
+                return True, {"message": "No standards defined for this channel type"}
+            
+            # Process the script
+            lines = [line for line in script.split('\n') if line.strip()]
+            word_count = len(script.split())
+            estimated_duration = self.estimate_video_length(script)
+            
+            # Validate against standards
+            validation_results = {
+                "lines": f"{len(lines)}/{standards.get('max_lines', 'no limit')} max",
+                "words": f"{word_count}/{standards.get('max_words', 'no limit')} max",
+                "estimated_duration": f"{estimated_duration:.1f}s"
             }
             
-            # Get limits for this channel type, or use default limits
-            limits = channel_limits.get(channel_type, {'max_words': 150, 'min_words': 20, 'max_duration': 60, 'max_lines': 12})
+            # Check completeness
+            completeness = self.check_content_completeness(script)
+            validation_results.update(completeness)
             
-            # Strict length validation - more flexible for tech_humor
-            if total_words > limits['max_words']:
-                return False, {"message": f"Script too long ({total_words} words). Maximum is {limits['max_words']} words."}
+            # Validate line count if max_lines is specified
+            if standards.get('max_lines') and len(lines) > standards['max_lines']:
+                log_warning(f"Script has too many lines: {len(lines)} > {standards['max_lines']}")
+                return False, {
+                    "message": f"Script has too many lines: {len(lines)} > {standards['max_lines']}",
+                    "validation": validation_results
+                }
             
-            if len(lines) > limits['max_lines']:
-                return False, {"message": f"Too many lines ({len(lines)}). Maximum is {limits['max_lines']} lines."}
-
-            # Print analysis
-            print(colored("\nScript Analysis:", "blue"))
-            print(colored(f"Lines: {len(lines)}/{limits['max_lines']} max", "cyan"))
-            print(colored(f"Words: {total_words}/{limits['max_words']} max", "cyan"))
-            print(colored(f"Estimated Duration: {estimated_duration:.1f}s", "cyan"))
+            # Validate word count if max_words is specified
+            if standards.get('max_words') and word_count > standards['max_words']:
+                log_warning(f"Script has too many words: {word_count} > {standards['max_words']}")
+                return False, {
+                    "message": f"Script has too many words: {word_count} > {standards['max_words']}",
+                    "validation": validation_results
+                }
             
-            # Print the processed script
-            print(colored("\nProcessed Script:", "blue"))
-            for i, line in enumerate(lines, 1):
-                print(colored(f"{i}. {line}", "cyan"))
-
-            # Check for minimum content - more flexible for tech_humor
-            if total_words < limits['min_words']:
-                return False, {"message": f"Script too short, need at least {limits['min_words']} words"}
-
-            # Save successful scripts for learning
-            ideal_min = limits['max_duration'] * 0.4  # 40% of max duration
-            ideal_max = limits['max_duration']
+            # Validate estimated duration against min_duration and max_duration
+            if standards.get('min_duration') and estimated_duration < standards['min_duration']:
+                log_warning(f"Script is too short: {estimated_duration:.1f}s < {standards['min_duration']}s")
+                return False, {
+                    "message": f"Script is too short: {estimated_duration:.1f}s < {standards['min_duration']}s",
+                    "validation": validation_results
+                }
             
-            # For tech_humor, we're more flexible with the ideal range
-            if channel_type == 'tech_humor':
-                ideal_min = 10  # Even very short jokes are fine
+            if standards.get('max_duration') and estimated_duration > standards['max_duration']:
+                log_warning(f"Script is too long: {estimated_duration:.1f}s > {standards['max_duration']}s")
+                return False, {
+                    "message": f"Script is too long: {estimated_duration:.1f}s > {standards['max_duration']}s",
+                    "validation": validation_results
+                }
             
-            if ideal_min <= estimated_duration <= ideal_max:
-                self._save_successful_script(channel_type, script, {
-                    "duration": estimated_duration,
-                    "words": total_words,
-                    "lines": len(lines)
-                })
-
+            # Check for missing required elements
+            if standards.get('required_elements'):
+                missing_elements = []
+                for element in standards['required_elements']:
+                    if element.lower() not in script.lower():
+                        missing_elements.append(element)
+                
+                if missing_elements:
+                    log_warning(f"Script is missing required elements: {', '.join(missing_elements)}")
+                    return False, {
+                        "message": f"Script is missing required elements: {', '.join(missing_elements)}",
+                        "validation": validation_results
+                    }
+            
+            # Save successful script for learning
+            self._save_successful_script(channel_type, script, validation_results)
+            
+            log_success("Script validated successfully")
             return True, {
-                "lines": len(lines),
-                "words": total_words,
-                "estimated_duration": estimated_duration,
-                "is_ideal_length": ideal_min <= estimated_duration <= ideal_max
+                "message": "Script validated successfully",
+                "validation": validation_results
             }
-
+            
         except Exception as e:
-            print(colored(f"Error validating script: {str(e)}", "red"))
-            return False, str(e)
+            log_error(f"Error validating script: {str(e)}")
+            return False, {"message": f"Error validating script: {str(e)}"}
 
     def _save_successful_script(self, channel_type: str, script: str, metrics: dict):
         """Save successful scripts to learn from"""
@@ -131,72 +148,80 @@ class ContentValidator:
             print(colored(f"Error saving successful script: {str(e)}", "yellow"))
 
     def estimate_video_length(self, script):
-        """Estimate video length based on word count and pacing"""
+        """Estimate the length of the video based on the script"""
+        # Count words in the script
         words = len(script.split())
-        # Average speaking rate (words per minute)
-        speaking_rate = 150
-        # Add time for visuals, transitions, etc.
-        base_duration = (words / speaking_rate) * 60
-        total_duration = base_duration * 1.2  # 20% buffer for pacing
-        return total_duration
+        
+        # Average speaking rate is about 150 words per minute or 2.5 words per second
+        # We add 20% for pauses and pacing
+        estimated_seconds = (words / 2.5) * 1.2
+        
+        return estimated_seconds
 
     def check_content_completeness(self, content):
-        """Check if all necessary content elements are present"""
-        required_elements = {
-            'script': True,
-            'title': True,
-            'description': True,
-            'tags': True,
-            'thumbnail_text': True
+        """Check if the content has all necessary elements"""
+        # Analyze content for completeness
+        result = {
+            'has_intro': bool(re.search(r'^.{0,100}(hi|hello|welcome|hey|greetings|intro|today)', content.lower())),
+            'has_conclusion': bool(re.search(r'(conclusion|finally|in summary|to summarize|thanks|thank you|bye)[\s\S]{0,100}$', content.lower())),
+            'has_hook': bool(re.search(r'^.{0,150}(want|need|wonder|curious|imagine|discover|learn|reveal|secret|amazing|incredible|surprising)', content.lower())),
+            'has_value_prop': bool(re.search(r'(benefit|improve|boost|enhance|increase|save|help|solution)', content.lower())),
         }
         
-        missing_elements = []
-        for element, required in required_elements.items():
-            if required and not content.get(element):
-                missing_elements.append(element)
-        
-        return len(missing_elements) == 0, missing_elements
+        return result
 
     def get_channel_standards(self, channel_type):
-        """Get channel-specific quality standards"""
-        standards = {
+        """Get the standards for a specific channel type"""
+        # Default standards
+        default_standards = {
+            'max_lines': 12,
+            'max_words': 150,
+            'min_duration': 20,
+            'max_duration': 60,
+            'required_elements': []
+        }
+        
+        # Channel-specific standards
+        channel_standards = {
             'tech_humor': {
-                'min_jokes': 3,
-                'max_technical_terms': 5,
-                'tone': 'humorous',
-                'required_sections': ['setup', 'punchline', 'tech_explanation'],
-                'thumbnail_style': 'funny_tech'
+                'max_lines': 10,
+                'max_words': 100,
+                'min_duration': 10,
+                'max_duration': 60,
+                'required_elements': []
             },
             'ai_money': {
-                'min_steps': 3,
-                'required_data': ['earnings_example', 'proof', 'timeline'],
-                'tone': 'professional',
-                'required_sections': ['opportunity', 'method', 'results'],
-                'thumbnail_style': 'business'
+                'max_lines': 15,
+                'max_words': 200,
+                'min_duration': 30,
+                'max_duration': 90,
+                'required_elements': []
             },
             'baby_tips': {
-                'safety_check': True,
-                'medical_disclaimer': True,
-                'tone': 'warm_supportive',
-                'required_sections': ['problem', 'solution', 'safety_notes'],
-                'thumbnail_style': 'parenting'
+                'max_lines': 15,
+                'max_words': 200,
+                'min_duration': 30,
+                'max_duration': 90,
+                'required_elements': []
             },
             'quick_meals': {
-                'ingredient_count': '5-10',
-                'prep_time': '15min',
-                'nutrition_info': True,
-                'required_sections': ['ingredients', 'steps', 'tips'],
-                'thumbnail_style': 'food'
+                'max_lines': 15,
+                'max_words': 200,
+                'min_duration': 30,
+                'max_duration': 90,
+                'required_elements': []
             },
             'fitness_motivation': {
-                'exercise_safety': True,
-                'difficulty_level': True,
-                'modifications': True,
-                'required_sections': ['warmup', 'workout', 'cooldown'],
-                'thumbnail_style': 'fitness'
+                'max_lines': 15,
+                'max_words': 200,
+                'min_duration': 30,
+                'max_duration': 90,
+                'required_elements': []
             }
         }
-        return standards.get(channel_type, {})
+        
+        # Return the channel-specific standards or default standards
+        return channel_standards.get(channel_type, default_standards)
 
 class ScriptGenerator:
     def __init__(self):

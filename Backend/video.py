@@ -44,11 +44,11 @@ def log_section(title, emoji="✨"):
 
 def log_error(message, emoji="❌"):
     """Log an error message in red with emoji"""
-    cprint(f"{emoji} Error: {message}", "red")
+    cprint(f"{emoji} {message}", "red")
 
 def log_warning(message, emoji="⚠️"):
     """Log a warning message in yellow with emoji"""
-    cprint(f"{emoji} Warning: {message}", "yellow")
+    cprint(f"{emoji} {message}", "yellow")
 
 def log_info(message, emoji="ℹ️"):
     """Log an info message in cyan with emoji"""
@@ -71,7 +71,41 @@ def log_progress(current, total, prefix="", suffix="", length=30):
     if current == total:
         print()
 
-# ===== END LOGGING FUNCTIONS =====
+def log_debug(message, emoji="🔍"):
+    """Log a debug message - only shown when DEBUG is enabled"""
+    if os.environ.get("DEBUG_LOGS", "0") == "1":
+        cprint(f"{emoji} {message}", "white")
+
+def log_step(step_num, total_steps, message, emoji="🔄", start_time=None, end_time=None):
+    """Log a step in a multi-step process"""
+    if start_time is not None:
+        message = f"{message} (Started)"
+    elif end_time is not None and start_time is not None:
+        duration = end_time - start_time
+        message = f"{message} (Completed in {duration:.1f}s)"
+    elif end_time is not None:
+        message = f"{message} (Completed)"
+    
+    cprint(f"{emoji} Step {step_num}/{total_steps}: {message}", "cyan")
+
+def log_separator(char="=", length=50):
+    """Print a separator line"""
+    print(char * length)
+
+def log_highlight(message, emoji="🔆"):
+    """Highlight important information"""
+    log_separator()
+    cprint(f"{emoji} {message} {emoji}", "green", attrs=["bold"])
+    log_separator()
+
+def log_result(title, path, emoji="📁"):
+    """Log file output result with absolute path"""
+    log_separator()
+    cprint(f"{emoji} {title}:", "green", attrs=["bold"])
+    cprint(f"{os.path.abspath(path)}", "cyan")
+    log_separator()
+
+# ===== END LOGGING FUNCTIONS ====
 
 def save_video(video_url: str, directory: str) -> str:
     """Saves a video from URL to specified directory"""
@@ -111,6 +145,10 @@ def format_time(seconds):
 def generate_subtitles(script: str, audio_path: str, content_type: str = None) -> str:
     """Generate SRT subtitles from script with improved timing for better synchronization"""
     try:
+        from video import log_info, log_success, log_warning, log_error, log_step
+        
+        log_info("Generating synchronized subtitles")
+        
         # First, check if we have a cleaned script in the JSON file
         json_path = f"cache/scripts/{content_type}_latest.json"
         if os.path.exists(json_path):
@@ -119,9 +157,9 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
                     script_data = json.load(f)
                     if "cleaned_script" in script_data and script_data["cleaned_script"].strip():
                         script = script_data["cleaned_script"]
-                        print(colored(f"Using pre-cleaned script from JSON file for subtitles", "green"))
+                        log_success("Using pre-cleaned script from JSON file for subtitles")
             except Exception as e:
-                print(colored(f"Error reading JSON file: {str(e)}", "yellow"))
+                log_warning(f"Error reading JSON file: {str(e)}")
                 # Continue with the provided script
         
         # Get audio duration
@@ -133,8 +171,8 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         os.makedirs("temp/subtitles", exist_ok=True)
         subtitles_path = "temp/subtitles/generated_subtitles.srt"
         
-        # Print the original script
-        print(colored(f"Original script for subtitles:\n{script}", "blue"))
+        # Process script to create better subtitles
+        log_info("Processing script for enhanced subtitle synchronization")
         
         # Process script line by line to preserve original emoji positioning
         lines = script.replace('"', '').split('\n')
@@ -179,177 +217,127 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
             if not skip_line and line.strip():
                 raw_sentences.append(line)
         
-        # Check if we have any sentences after processing
-        if not raw_sentences:
-            print(colored("Warning: No sentences found after processing. Using original script with headers removed.", "yellow"))
-            # Use the original script but remove the headers
-            for line in lines:
-                if line.strip():
-                    # Skip lines that only contain special characters
-                    if line.strip() in special_patterns or line.strip("-*#") == "":
-                        continue
-                        
-                    # Remove numeric prefixes
-                    clean_line = re.sub(r'^\d+\.\s*', '', line.strip())
-                    # Remove all section headers
-                    for header in section_headers:
-                        if header in clean_line:
-                            clean_line = clean_line.replace(header, '')
-                    if clean_line.strip():
-                        raw_sentences.append(clean_line.strip())
-        
-        # Split long sentences into smaller chunks for better readability
+        # Split into more granular sentences for better sync
         sentences = []
-        max_chars_per_subtitle = 80  # Maximum characters per subtitle line
+        max_chars_per_subtitle = 70  # Shorter for better readability and sync
         
+        # More sophisticated sentence splitting for better sync with audio
         for sentence in raw_sentences:
-            # If sentence is short enough, add it as is
-            if len(sentence) <= max_chars_per_subtitle:
-                sentences.append(sentence)
-            else:
-                # Split by natural break points (., !, ?, :, ;)
-                parts = re.split(r'([.!?:;])', sentence)
-                
-                # Recombine the parts with their punctuation
-                chunks = []
-                current_chunk = ""
-                
-                for i in range(0, len(parts), 2):
-                    part = parts[i]
-                    punctuation = parts[i+1] if i+1 < len(parts) else ""
+            # Split by natural pause points first
+            chunks = re.split(r'([.!?:;,])', sentence)
+            rebuilt_chunks = []
+            
+            current = ""
+            for i in range(0, len(chunks) - 1, 2):
+                if i < len(chunks):
+                    part = chunks[i]
+                    punct = chunks[i+1] if i+1 < len(chunks) else ""
                     
-                    if len(current_chunk) + len(part) + len(punctuation) <= max_chars_per_subtitle:
-                        current_chunk += part + punctuation
+                    if len(current) + len(part) + 1 <= max_chars_per_subtitle:
+                        current += part + punct
                     else:
-                        # If the current chunk is not empty, add it to chunks
-                        if current_chunk:
-                            chunks.append(current_chunk)
-                        
-                        # Start a new chunk
-                        current_chunk = part + punctuation
+                        if current:
+                            rebuilt_chunks.append(current.strip())
+                        current = part + punct
+            
+            if current:
+                rebuilt_chunks.append(current.strip())
                 
-                # Add the last chunk if it's not empty
-                if current_chunk:
-                    chunks.append(current_chunk)
-                
-                # If we couldn't split by punctuation (or the parts are still too long),
-                # split by phrases (commas) or just by length
-                if not chunks or any(len(chunk) > max_chars_per_subtitle for chunk in chunks):
-                    chunks = []
-                    parts = re.split(r'([,])', sentence)
-                    
-                    current_chunk = ""
-                    for i in range(0, len(parts), 2):
-                        part = parts[i]
-                        comma = parts[i+1] if i+1 < len(parts) else ""
-                        
-                        if len(current_chunk) + len(part) + len(comma) <= max_chars_per_subtitle:
-                            current_chunk += part + comma
+            # If no chunks were created, handle the sentence as a whole
+            if not rebuilt_chunks:
+                # Split by commas or spaces for better synchronization
+                if len(sentence) > max_chars_per_subtitle:
+                    words = sentence.split()
+                    current = ""
+                    for word in words:
+                        if len(current) + len(word) + 1 <= max_chars_per_subtitle:
+                            current += " " + word if current else word
                         else:
-                            # If the current chunk is not empty, add it to chunks
-                            if current_chunk:
-                                chunks.append(current_chunk)
-                            
-                            # Start a new chunk
-                            current_chunk = part + comma
-                    
-                    # Add the last chunk if it's not empty
-                    if current_chunk:
-                        chunks.append(current_chunk)
-                
-                # If we still have chunks that are too long, split them by length
-                final_chunks = []
-                for chunk in chunks:
-                    if len(chunk) <= max_chars_per_subtitle:
-                        final_chunks.append(chunk)
-                    else:
-                        # Split by words, trying to keep chunks under max_chars_per_subtitle
-                        words = chunk.split()
-                        current_chunk = ""
-                        
-                        for word in words:
-                            if len(current_chunk) + len(word) + 1 <= max_chars_per_subtitle:
-                                current_chunk += (" " if current_chunk else "") + word
-                            else:
-                                final_chunks.append(current_chunk)
-                                current_chunk = word
-                        
-                        if current_chunk:
-                            final_chunks.append(current_chunk)
-                
-                # Add all chunks to sentences
-                sentences.extend(final_chunks)
-        
-        # Print the processed sentences
-        print(colored(f"Processed {len(sentences)} sentences for subtitles", "blue"))
-        for i, sentence in enumerate(sentences):
-            print(colored(f"  {i+1}: {sentence}", "blue"))
-        
-        # Calculate total word count for better timing distribution
-        total_words = sum(len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)]) 
-                          for sentence in sentences)
-        
-        # Allocate time proportionally based on word count
-        # Reserve 90% of the audio duration for subtitles, leaving 10% for natural pauses
-        usable_duration = total_duration * 0.9
-        
-        # Write SRT file directly from the original lines
-        with open(subtitles_path, "w", encoding="utf-8-sig") as f:
-            current_time = 0.2  # Start with a small initial delay (0.2s)
-            
-            for i, sentence in enumerate(sentences):
-                # Calculate word count for timing
-                word_count = len([w for w in sentence.split() if not all(emoji.is_emoji(c) for c in w)])
-                
-                # Calculate duration proportionally to word count
-                if total_words > 0:
-                    proportion = word_count / total_words
-                    est_duration = max(1.0, min(4.0, usable_duration * proportion))
+                            if current:
+                                rebuilt_chunks.append(current.strip())
+                            current = word
+                    if current:
+                        rebuilt_chunks.append(current.strip())
                 else:
-                    est_duration = 2.0  # Default duration if no words
-                
-                # Ensure we don't exceed audio duration
-                if current_time + est_duration > total_duration:
-                    est_duration = total_duration - current_time
-                
-                if est_duration <= 0:
-                    break
-                
-                # Write SRT entry
-                start_time = format_time(current_time)
-                end_time = format_time(current_time + est_duration)
-                
-                f.write(f"{i+1}\n")
-                f.write(f"{start_time} --> {end_time}\n")
-                f.write(f"{sentence}\n\n")
-                
-                # Gap between subtitles - smaller gap for better flow
-                current_time += est_duration + 0.1
+                    rebuilt_chunks.append(sentence)
             
-        log_success(f"Generated {len(sentences)} subtitles with improved timing")
-        return subtitles_path
+            sentences.extend([chunk for chunk in rebuilt_chunks if chunk.strip()])
+        
+        # Now create the subtitle timing based on audio duration
+        subtitle_count = len(sentences)
+        log_info(f"Creating {subtitle_count} subtitle segments for precise synchronization")
+        
+        # Calculate timing based on audio duration
+        # Improved algorithm for more natural timing
+        if subtitle_count > 0:
+            # Calculate pauses between sentences to create natural rhythm
+            base_duration = total_duration / subtitle_count
+            
+            # For shorter segments, allocate more time to each segment
+            segment_durations = []
+            
+            # First pass: allocate duration based on text length
+            total_chars = sum(len(s) for s in sentences)
+            for sentence in sentences:
+                # Proportion of total characters, with minimum time
+                char_proportion = len(sentence) / total_chars if total_chars > 0 else 1/subtitle_count
+                duration = max(1.0, char_proportion * total_duration)
+                segment_durations.append(duration)
+            
+            # Adjust to match total duration
+            scale_factor = total_duration / sum(segment_durations)
+            segment_durations = [d * scale_factor for d in segment_durations]
+            
+            # Generate the actual subtitle file with improved timing
+            with open(subtitles_path, "w", encoding="utf-8") as f:
+                current_time = 0.0
+                for i, (sentence, duration) in enumerate(zip(sentences, segment_durations)):
+                    start_time = current_time
+                    end_time = start_time + duration
+                    
+                    # Format times for SRT
+                    start_formatted = format_time(start_time)
+                    end_formatted = format_time(end_time)
+                    
+                    # Write subtitle entry
+                    f.write(f"{i+1}\n")
+                    f.write(f"{start_formatted} --> {end_formatted}\n")
+                    f.write(f"{sentence.strip()}\n\n")
+                    
+                    # Update current time for next subtitle
+                    current_time = end_time
+            
+            log_success(f"Created {subtitle_count} precisely timed subtitle segments")
+            return subtitles_path
+        else:
+            log_warning("No valid subtitle content found")
+            return None
     
     except Exception as e:
         log_error(f"Error generating subtitles: {str(e)}")
+        traceback.print_exc()
         return None
 
 def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
     """Combine multiple videos with smooth transitions for YouTube Shorts"""
+    from video import log_info, log_success, log_warning, log_error, log_step
+    
     try:
         log_section("Video Combination", "🔄")
         
-        # Calculate total target duration
-        total_duration = audio_duration if audio_duration else target_duration
+        # Validate input
+        if not video_paths:
+            log_error("No videos provided")
+            return None
         
-        # IMPORTANT: Slightly reduce the target duration to prevent black fade at end
-        adjusted_duration = total_duration - 0.1  # Reduce by 0.1 seconds
-        
-        log_info(f"Audio duration: {total_duration:.2f}s")
+        log_info(f"Audio duration: {audio_duration:.2f}s")
         log_info(f"Target duration: {target_duration:.2f}s")
-        log_info(f"Adjusted duration: {adjusted_duration:.2f}s")
-        log_info(f"Number of videos: {len(video_paths)}")
         
-        # If only one video, just use it directly
+        # Adjust target duration to avoid black frames at the end
+        adjusted_duration = target_duration - 0.05
+        log_info(f"Adjusted to {adjusted_duration:.2f}s to prevent black end frame")
+        
+        # If only one video is provided, use it directly
         if len(video_paths) == 1:
             log_info("Only one video provided, using it directly")
             video_path = video_paths[0]
@@ -395,142 +383,118 @@ def combine_videos(video_paths, audio_duration, target_duration, n_threads=4):
         # Calculate segment duration
         num_videos = len(video_paths)
         segment_duration = adjusted_duration / num_videos
+        log_info(f"Number of videos: {num_videos}")
         log_info(f"Segment duration per video: {segment_duration:.2f}s")
         
         # Create a temporary directory for segment files
         temp_dir = "temp/segments"
         os.makedirs(temp_dir, exist_ok=True)
         
-        # Process each video into a separate file
-        segment_files = []
+        # Process each video
+        valid_segments = []
         
-        for i, video_data in enumerate(video_paths):
-            log_processing(f"Processing video {i+1}/{num_videos}")
+        for i, video_path in enumerate(video_paths):
+            log_step(i+1, num_videos, f"Processing video {i+1}/{num_videos}")
             
-            # Get path (handle both dict and string formats)
-            if isinstance(video_data, dict):
-                video_path = video_data.get('path')
-            else:
-                video_path = video_data
+            if isinstance(video_path, dict):
+                video_path = video_path.get('path')
             
             log_info(f"Video path: {video_path}")
             
-            # Verify file exists
+            # Check if the video file exists
             if not os.path.exists(video_path):
-                log_warning(f"Video file does not exist: {video_path}")
+                log_warning(f"Video file doesn't exist, skipping: {video_path}")
                 continue
-            
+                
             try:
                 # Load video
                 video = VideoFileClip(video_path, fps_source="fps")
                 
+                # Handle short videos by looping them instead of skipping
                 if video.duration < segment_duration:
-                    log_warning(f"Video too short ({video.duration:.2f}s), skipping")
-                    video.close()
-                    continue
+                    log_info(f"Video shorter than segment duration ({video.duration:.2f}s < {segment_duration:.2f}s), looping")
+                    loop_count = math.ceil(segment_duration / video.duration)
+                    # Create looped version using MoviePy's loop method
+                    video = vfx.loop(video, duration=segment_duration)
+                elif video.duration > segment_duration:
+                    # Take a random segment if the video is longer than needed
+                    max_start = max(0, video.duration - segment_duration)
+                    start_time = random.uniform(0, max_start)
+                    video = video.subclip(start_time, start_time + segment_duration)
+                    log_info(f"Using segment from {start_time:.2f}s to {start_time + segment_duration:.2f}s")
                 
-                # Choose a random starting point
-                max_start = max(0, video.duration - segment_duration)
-                start_time = random.uniform(0, max_start)
+                # Resize to vertical format for YouTube Shorts
+                video = resize_to_vertical(video)
                 
-                # Create a subclip
-                subclip = video.subclip(start_time, start_time + segment_duration)
-                
-                # Resize to vertical format
-                subclip = resize_to_vertical(subclip)
-                
-                # Save segment to a file
+                # Set segment path
                 segment_path = os.path.join(temp_dir, f"segment_{i}.mp4")
-                subclip.write_videofile(
+                
+                # Write segment file without audio
+                video.without_audio().write_videofile(
                     segment_path,
                     codec="libx264",
-                    audio=False,
                     fps=30,
                     preset="medium",
                     threads=n_threads
                 )
                 
-                segment_files.append(segment_path)
+                video.close()
+                valid_segments.append(segment_path)
                 log_success(f"Created segment {i+1}: {segment_path}")
                 
-                # Close clips
-                subclip.close()
-                video.close()
-                
             except Exception as e:
-                log_error(f"Error processing video {i+1}: {str(e)}")
+                log_warning(f"Error processing video {i+1}: {str(e)}")
+                # Try to continue with other videos
                 continue
         
-        # Check if we have any segments
-        if not segment_files:
+        # Check if we have any valid segments
+        if not valid_segments:
             log_error("No valid segments created")
             return None
+            
+        log_info(f"Created {len(valid_segments)} video segments")
         
-        log_info(f"Created {len(segment_files)} video segments")
-        
-        # If we only have one segment, just use it
-        if len(segment_files) == 1:
-            log_info("Only one segment created, using it directly")
+        # If we have more than one segment, concatenate them
+        if len(valid_segments) > 1:
+            # Create a list file for ffmpeg
+            segments_file = os.path.join(temp_dir, "segments.txt")
+            with open(segments_file, "w") as f:
+                for segment in valid_segments:
+                    # Use absolute paths to avoid issues
+                    abs_path = os.path.abspath(segment)
+                    f.write(f"file '{abs_path}'\n")
+            
+            # Concatenate segments using ffmpeg
             output_path = "temp_combined.mp4"
-            shutil.copy(segment_files[0], output_path)
-            return output_path
-        
-        # Create a file list for ffmpeg
-        list_file = os.path.join(temp_dir, "segments.txt")
-        with open(list_file, "w") as f:
-            for segment in segment_files:
-                f.write(f"file '{os.path.abspath(segment)}'\n")
-        
-        # Use ffmpeg to concatenate the segments
-        output_path = "temp_combined.mp4"
-        try:
             log_info("Concatenating segments with ffmpeg")
             
-            # Build the ffmpeg command
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-y",  # Overwrite output file if it exists
-                "-f", "concat",
-                "-safe", "0",
-                "-i", list_file,
-                "-c", "copy",
-                output_path
-            ]
-            
-            # Run the command
-            process = subprocess.run(
-                ffmpeg_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            if process.returncode != 0:
-                log_error(f"FFmpeg error: {process.stderr}")
-                
-                # Fallback to using the first segment
-                log_warning("Concatenation failed, using first segment as fallback")
-                shutil.copy(segment_files[0], output_path)
-            else:
-                log_success("Successfully concatenated segments")
-            
-            return output_path
-            
-        except Exception as e:
-            log_error(f"Error concatenating segments: {str(e)}")
-            
-            # Fallback to using the first segment
             try:
-                log_warning("Using first segment as fallback")
-                shutil.copy(segment_files[0], output_path)
+                subprocess.run([
+                    "ffmpeg", 
+                    "-y", 
+                    "-f", "concat", 
+                    "-safe", "0", 
+                    "-i", segments_file, 
+                    "-c", "copy", 
+                    output_path
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                log_success("Successfully concatenated segments")
                 return output_path
-            except Exception as inner_e:
-                log_error(f"Fallback failed: {str(inner_e)}")
+            except subprocess.CalledProcessError as e:
+                log_error(f"Error concatenating segments: {str(e)}")
+                # Fallback to the first valid segment if concatenation fails
+                if valid_segments:
+                    log_warning("Using first segment as fallback")
+                    return valid_segments[0]
                 return None
+        else:
+            # If only one segment was created, use it
+            log_info("Only one valid segment created, using it directly")
+            return valid_segments[0]
             
     except Exception as e:
-        log_error(f"Error in combine_videos: {str(e)}")
-        log_error(traceback.format_exc())
+        log_error(f"Error combining videos: {str(e)}")
         return None
 
 def get_background_music(content_type: str, duration: float = None) -> str:
@@ -919,168 +883,76 @@ def create_text_with_emoji(txt, size=(1080, 800)):
         except Exception:
             font = ImageFont.load_default()
         
-        # Detect and extract emojis
-        emoji_pattern = emoji.get_emoji_regexp()
+        # Instead of using emoji.get_emoji_regexp() which is causing errors,
+        # we'll use a simpler approach and just render the text directly
         
-        # IMPROVED TEXT WRAPPING FOR SHORTS
-        # Calculate max width for text (narrower than the full width)
-        max_width = int(size[0] * 0.85)  # Use only 85% of width
+        # Calculate text size for centering
+        text_bbox = draw.textbbox((0, 0), txt, font=font)
+        text_width = text_bbox[2]
+        text_height = text_bbox[3]
         
-        # Split text into words for wrapping
-        words = txt.split()
-        lines = []
-        current_line = []
-        current_width = 0
+        # Calculate position to center text
+        x = (size[0] - text_width) // 2
+        y = (size[1] - text_height) // 2 - 50  # Move a bit higher to be more centered in frame
         
-        for word in words:
-            # Check if word contains emoji
-            has_emoji = emoji_pattern.search(word)
-            
-            # Calculate word width (approximate for emojis)
-            if has_emoji:
-                # Count emojis in word
-                emoji_count = len([c for c in word if emoji.is_emoji(c)])
-                non_emoji_text = ''.join([c for c in word if not emoji.is_emoji(c)])
-                
-                try:
-                    text_width = draw.textlength(non_emoji_text, font=font)
-                except AttributeError:
-                    text_width, _ = draw.textsize(non_emoji_text, font=font)
-                
-                word_width = text_width + (emoji_count * 80)  # Emoji width approximation
-            else:
-                try:
-                    word_width = draw.textlength(word, font=font)
-                except AttributeError:
-                    word_width, _ = draw.textsize(word, font=font)
-            
-            # Check if adding this word exceeds max width
-            if current_width + word_width <= max_width:
-                current_line.append(word)
-                current_width += word_width + 10  # Add space width
-            else:
-                # Start new line
-                if current_line:
-                    lines.append(' '.join(current_line))
-                current_line = [word]
-                current_width = word_width
+        # Draw background for better readability - semi-transparent black background
+        padding = 20
+        bg_x = x - padding
+        bg_y = y - padding
+        bg_width = text_width + (padding * 2)
+        bg_height = text_height + (padding * 2)
         
-        # Add the last line
-        if current_line:
-            lines.append(' '.join(current_line))
+        # Draw rounded rectangle background
+        radius = 20
+        draw.rounded_rectangle(
+            [(bg_x, bg_y), (bg_x + bg_width, bg_y + bg_height)],
+            radius=radius,
+            fill=(0, 0, 0, 180)  # Semi-transparent black
+        )
         
-        # If we have no lines (rare case), just use the original text
-        if not lines:
-            lines = [txt]
-        
-        # Calculate total height needed for all lines
-        line_height = int(font.size * 1.2)  # 20% spacing between lines
-        total_text_height = len(lines) * line_height
-        
-        # Position text vertically centered
-        y_position = (size[1] - total_text_height) // 2
-        
-        # Draw each line
-        for line in lines:
-            # Detect and extract emojis for this line
-            parts = []
-            last_end = 0
-            
-            for match in emoji_pattern.finditer(line):
-                start, end = match.span()
-                if start > last_end:
-                    parts.append((line[last_end:start], False))
-                parts.append((line[start:end], True))
-                last_end = end
-            
-            if last_end < len(line):
-                parts.append((line[last_end:], False))
-            
-            # Calculate line width for centering
-            text_without_emoji = "".join(part for part, is_emoji in parts if not is_emoji)
-            try:
-                text_width = draw.textlength(text_without_emoji, font=font)
-            except AttributeError:
-                text_width, _ = draw.textsize(text_without_emoji, font=font)
-            
-            # Calculate emoji count and approximate width
-            emoji_count = sum(1 for _, is_emoji in parts if is_emoji)
-            emoji_width = emoji_count * 80  # Approximate width of each emoji
-            
-            total_width = text_width + emoji_width
-            x_position = (size[0] - total_width) / 2
-            
-            # Draw text with emojis
-            current_x = x_position
-            
-            for part, is_emoji in parts:
-                if is_emoji:
-                    # Enhanced emoji handling - try multiple approaches
-                    try:
-                        # First try with our improved emoji handling
-                        emoji_img = get_emoji_image(part, size=80)  # Increased from 70 to 80
-                        if emoji_img:
-                            img.paste(emoji_img, (int(current_x), int(y_position)), emoji_img)
-                            current_x += 80  # Increased from 70 to 80
-                        else:
-                            # If that fails, just draw the emoji as text
-                            # Draw text outline/stroke for better visibility
-                            stroke_width = 3
-                            for offset_x in range(-stroke_width, stroke_width + 1):
-                                for offset_y in range(-stroke_width, stroke_width + 1):
-                                    if offset_x == 0 and offset_y == 0:
-                                        continue
-                                    draw.text((current_x + offset_x, y_position + offset_y), part, fill=(0, 0, 0, 255), font=font)
-                            
-                            # Draw the main text
-                            draw.text((current_x, y_position), part, fill=(255, 255, 255, 255), font=font)
-                            try:
-                                current_x += draw.textlength(part, font=font)
-                            except AttributeError:
-                                width, _ = draw.textsize(part, font=font)
-                                current_x += width
-                    except Exception as e:
-                        log_warning(f"Error processing emoji: {str(e)}")
-                        # Just draw the emoji as text with stroke
-                        stroke_width = 3
-                        for offset_x in range(-stroke_width, stroke_width + 1):
-                            for offset_y in range(-stroke_width, stroke_width + 1):
-                                if offset_x == 0 and offset_y == 0:
-                                    continue
-                                draw.text((current_x + offset_x, y_position + offset_y), part, fill=(0, 0, 0, 255), font=font)
-                        
-                        # Draw the main text
-                        draw.text((current_x, y_position), part, fill=(255, 255, 255, 255), font=font)
-                        try:
-                            current_x += draw.textlength(part, font=font)
-                        except AttributeError:
-                            width, _ = draw.textsize(part, font=font)
-                            current_x += width
-                else:
-                    # Draw regular text with stroke/outline for better visibility
-                    stroke_width = 3
-                    for offset_x in range(-stroke_width, stroke_width + 1):
-                        for offset_y in range(-stroke_width, stroke_width + 1):
-                            if offset_x == 0 and offset_y == 0:
-                                continue
-                            draw.text((current_x + offset_x, y_position + offset_y), part, fill=(0, 0, 0, 255), font=font)
-                    
-                    # Draw the main text
-                    draw.text((current_x, y_position), part, fill=(255, 255, 255, 255), font=font)
-                    try:
-                        current_x += draw.textlength(part, font=font)
-                    except AttributeError:
-                        width, _ = draw.textsize(part, font=font)
-                        current_x += width
-            
-            # Move to next line
-            y_position += line_height
+        # Draw text in white
+        draw.text((x, y), txt, fill=(255, 255, 255, 255), font=font)
         
         return img
-        
     except Exception as e:
-        log_error(f"Error creating text with emoji: {str(e)}")
-        return None
+        log_error(f"Error creating text: {str(e)}")
+        # Create a simple fallback text image
+        return create_fallback_text(txt, size)
+
+def create_fallback_text(txt, size=(1080, 800)):
+    """Create a simple fallback text image without emojis"""
+    try:
+        # Create a transparent background
+        img = Image.new('RGBA', size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # Use default font
+        font = ImageFont.load_default()
+        
+        # Calculate text size for centering
+        text_bbox = draw.textbbox((0, 0), txt, font=font)
+        text_width = text_bbox[2]
+        text_height = text_bbox[3]
+        
+        # Calculate position to center text
+        x = (size[0] - text_width) // 2
+        y = (size[1] - text_height) // 2
+        
+        # Draw background
+        padding = 10
+        draw.rectangle(
+            [(x - padding, y - padding), 
+             (x + text_width + padding, y + text_height + padding)],
+            fill=(0, 0, 0, 180)
+        )
+        
+        # Draw text
+        draw.text((x, y), txt, fill=(255, 255, 255, 255), font=font)
+        
+        return img
+    except:
+        # Last resort - just create a black image
+        return Image.new('RGBA', size, (0, 0, 0, 180))
 
 def create_subtitle_bg(txt, style=None, is_last=False, total_duration=None):
     """Create dynamic centered subtitles with emoji support"""
@@ -1208,104 +1080,156 @@ def enhance_tts_prompt(script, content_type):
     return base_prompt
 
 def process_subtitles(subs_path, base_video, start_padding=0.0):
-    """Process subtitles and add them to the video with improved styling"""
+    """Process subtitles and create clips to overlay on video"""
+    from video import log_info, log_success, log_warning, log_error, log_step
+    import emoji
+    import re
+    
     try:
-        # Read subtitles
-        subtitle_data = read_subtitles_file(subs_path)
-        
-        if not subtitle_data:
-            log_error("No valid subtitles found")
+        if not subs_path or not os.path.exists(subs_path):
+            log_warning("No subtitles file provided or file doesn't exist")
             return base_video
             
-        log_success(f"Found {len(subtitle_data)} subtitles")
-        
-        # Convert tuple format to dictionary format for easier processing
-        processed_subtitles = []
-        for times, text in subtitle_data:
-            processed_subtitles.append({
-                'start': times[0],
-                'end': times[1],
-                'text': text
-            })
-        
-        # Prepare subtitle images
-        log_info("Preparing subtitle images...")
-        
-        # Extend the last subtitle to the end of the video to prevent it from disappearing too early
-        if processed_subtitles:
-            last_sub = processed_subtitles[-1]
-            video_end = base_video.duration
+        # Parse the srt file
+        subs = pysrt.open(subs_path)
+        if not subs:
+            log_warning("No subtitles found in file")
+            return base_video
             
-            # Always extend the last subtitle to the full end of the video
-            # This ensures it stays on screen until the very end
-            log_success("Extended final subtitle until end of video")
-            last_sub['end'] = video_end  # No buffer at the end, stay until the very last frame
+        log_info(f"Processing {len(subs)} subtitles")
         
-        # Apply start padding offset to all subtitles
+        # Check if this is the last subtitle to extend it to the end
+        if len(subs) > 0:
+            last_sub = subs[-1]
+            # If the total duration is provided and the last subtitle ends before it
+            if hasattr(base_video, 'duration'):
+                total_duration = base_video.duration
+                
+                if last_sub.end.ordinal / 1000.0 < total_duration - 1.0:  # Give 1 second buffer
+                    # Extend the last subtitle to the end
+                    last_sub.end.seconds = int(total_duration)
+                    last_sub.end.minutes = int(total_duration) // 60
+                    last_sub.end.hours = int(total_duration) // 3600
+                    last_sub.end.milliseconds = int((total_duration % 1) * 1000)
+                    log_success("Extended final subtitle until end of video")
+        
+        # Apply start padding if provided
         if start_padding > 0:
-            for sub in processed_subtitles:
-                sub['start'] += start_padding
-                sub['end'] += start_padding
+            for sub in subs:
+                # Add offset to start and end times
+                sub.start.milliseconds += int(start_padding * 1000)
+                sub.end.milliseconds += int(start_padding * 1000)
+                
+                # Handle overflow
+                if sub.start.milliseconds >= 1000:
+                    sub.start.seconds += sub.start.milliseconds // 1000
+                    sub.start.milliseconds %= 1000
+                if sub.end.milliseconds >= 1000:
+                    sub.end.seconds += sub.end.milliseconds // 1000
+                    sub.end.milliseconds %= 1000
+                
+                # Handle minutes and hours overflow
+                if sub.start.seconds >= 60:
+                    sub.start.minutes += sub.start.seconds // 60
+                    sub.start.seconds %= 60
+                if sub.end.seconds >= 60:
+                    sub.end.minutes += sub.end.seconds // 60
+                    sub.end.seconds %= 60
+                
+                if sub.start.minutes >= 60:
+                    sub.start.hours += sub.start.minutes // 60
+                    sub.start.minutes %= 60
+                if sub.end.minutes >= 60:
+                    sub.end.hours += sub.end.minutes // 60
+                    sub.end.minutes %= 60
+            
             log_info(f"Applied {start_padding}s offset to all subtitles for start padding")
         
-        # Show progress for larger subtitle sets
-        total_subs = len(processed_subtitles)
+        # Create subtitle clips with modern styling
         subtitle_clips = []
+        video_width = base_video.w
+        video_height = base_video.h
         
-        for i, data in enumerate(processed_subtitles):
-            # Create subtitle background with text
-            style = {
-                'font_size': 40,
-                'bg_color': (0, 0, 0, 180),  # Semi-transparent black
-                'text_color': (255, 255, 255),
-                'padding': 15,
-                'border_radius': 10
-            }
+        for i, sub in enumerate(subs):
+            # Skip empty subtitles
+            if not sub.text.strip():
+                continue
+                
+            start_time = sub.start.ordinal / 1000.0  # Convert to seconds
+            end_time = sub.end.ordinal / 1000.0
             
-            # Check if this is the last subtitle
-            is_last = (i == total_subs - 1)
+            # Calculate duration explicitly
+            duration = end_time - start_time
+            
+            # Skip if duration is invalid
+            if duration <= 0:
+                log_warning(f"Skipping subtitle {i+1} with invalid duration: {duration}s")
+                continue
+                
+            # Clean the text (remove HTML tags and unescape entities)
+            clean_text = html.unescape(sub.text)
+            clean_text = re.sub(r'<[^>]+>', '', clean_text)
             
             try:
-                # Create text image with emoji support
-                text_image = create_text_with_emoji(data['text'], size=(1080, 800))
+                # Create a modern, stylish text clip with better visibility
+                fontsize = 52  # Slightly larger for better readability
+                if len(clean_text) > 50:  # Reduce font size for longer text
+                    fontsize = 44
                 
-                if text_image is None:
-                    continue
-                    
-                # Convert PIL image to MoviePy clip
-                img_array = np.array(text_image)
-                duration = data['end'] - data['start']
+                # Semi-transparent background for better readability
+                bg_color = 'rgba(0,0,0,0.75)'  # More opaque for better readability
                 
-                # Create clip with NO fade effects - completely eliminate transitions
-                # Position in the center of the screen (both horizontally and vertically)
-                sub_clip = (ImageClip(img_array)
-                    .set_duration(duration)
-                    .set_position(('center', 'center'))  # Center in the middle of the screen
-                    .set_start(data['start']))
+                # Create modern text clip with MoviePy
+                txt_clip = TextClip(
+                    clean_text,
+                    fontsize=fontsize,
+                    font='Arial-Bold',  # Bold font for better visibility
+                    color='white',
+                    bg_color=bg_color,
+                    size=(video_width * 0.9, None),  # 90% of video width
+                    method='caption',
+                    align='center', 
+                    stroke_width=2.0,  # Thicker stroke for better visibility
+                    stroke_color='black'
+                )
                 
-                subtitle_clips.append(sub_clip)
-            except Exception as clip_error:
-                log_error(f"Error creating subtitle clip {i+1}: {str(clip_error)}")
-            
-            # Show progress for larger subtitle sets
-            if total_subs > 5 and (i % 2 == 0 or i == total_subs - 1):
-                log_progress(i + 1, total_subs, prefix="Subtitle Preparation:", suffix="Complete")
+                # Add some margin and a slight zoom animation for "sing-along" effect
+                txt_clip = txt_clip.margin(top=12, bottom=12, left=20, right=20)
+                
+                # Add a subtle fade in/out for smooth transitions (sing-along style)
+                fade_duration = min(0.3, (end_time - start_time) / 4)  # 0.3s or 1/4 of duration, whichever is shorter
+                txt_clip = txt_clip.fadein(fade_duration).fadeout(fade_duration)
+                
+                # Position subtitles near the bottom center with a slight "karaoke" animation
+                position = ('center', 0.85)  # Position slightly lower for modern look
+                
+                # Set precise timing for better sync with audio
+                # This ensures the duration is properly set
+                txt_clip = txt_clip.set_position(position).set_start(start_time).set_end(end_time).set_duration(duration)
+                
+                # Add to the subtitle clips list
+                subtitle_clips.append(txt_clip)
+                
+                # Log progress but not for every subtitle to avoid cluttering output
+                if i == 0 or i == len(subs) - 1 or i % max(5, len(subs) // 5) == 0:
+                    log_info(f"Created subtitle {i+1}/{len(subs)}")
+                
+            except Exception as e:
+                log_warning(f"Error creating subtitle {i+1}: {str(e)}")
+                continue
         
-        # If no subtitle clips were created, return the base video
+        # Check if we created any subtitle clips
         if not subtitle_clips:
             log_warning("No valid subtitle clips were created, returning base video")
             return base_video
-            
-        # Create final video with subtitles
-        log_processing("Compositing final video with centered subtitles")
-        final_video = CompositeVideoClip([base_video] + subtitle_clips)
         
-        log_success("Added centered subtitles with clean transitions", "🎬")
-        return final_video
-    
+        # Combine all subtitle clips with the base video
+        log_success(f"Adding {len(subtitle_clips)} subtitles to video")
+        result = CompositeVideoClip([base_video] + subtitle_clips)
+        return result
+        
     except Exception as e:
         log_error(f"Error processing subtitles: {str(e)}")
-        log_error(traceback.format_exc())
         return base_video
 
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None, target_duration=None, 
