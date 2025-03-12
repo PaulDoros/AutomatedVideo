@@ -931,8 +931,8 @@ def create_fallback_text(txt, size=(1080, 800)):
         
         # Calculate text size for centering
         text_bbox = draw.textbbox((0, 0), txt, font=font)
-        text_width = text_bbox[2]
-        text_height = text_bbox[3]
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
         
         # Calculate position to center text
         x = (size[0] - text_width) // 2
@@ -1080,10 +1080,11 @@ def enhance_tts_prompt(script, content_type):
     return base_prompt
 
 def process_subtitles(subs_path, base_video, start_padding=0.0):
-    """Process subtitles and create clips to overlay on video"""
-    from video import log_info, log_success, log_warning, log_error, log_step
-    import emoji
-    import re
+    """Process subtitles and create clips to overlay on video with YouTube-style CC appearance"""
+    from video import log_info, log_success, log_warning, log_error
+    import pysrt
+    from PIL import Image, ImageDraw, ImageFont
+    import numpy as np
     
     try:
         if not subs_path or not os.path.exists(subs_path):
@@ -1098,129 +1099,184 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
             
         log_info(f"Processing {len(subs)} subtitles")
         
-        # Check if this is the last subtitle to extend it to the end
-        if len(subs) > 0:
-            last_sub = subs[-1]
-            # If the total duration is provided and the last subtitle ends before it
-            if hasattr(base_video, 'duration'):
-                total_duration = base_video.duration
-                
-                if last_sub.end.ordinal / 1000.0 < total_duration - 1.0:  # Give 1 second buffer
-                    # Extend the last subtitle to the end
-                    last_sub.end.seconds = int(total_duration)
-                    last_sub.end.minutes = int(total_duration) // 60
-                    last_sub.end.hours = int(total_duration) // 3600
-                    last_sub.end.milliseconds = int((total_duration % 1) * 1000)
-                    log_success("Extended final subtitle until end of video")
-        
-        # Apply start padding if provided
-        if start_padding > 0:
-            for sub in subs:
-                # Add offset to start and end times
-                sub.start.milliseconds += int(start_padding * 1000)
-                sub.end.milliseconds += int(start_padding * 1000)
-                
-                # Handle overflow
-                if sub.start.milliseconds >= 1000:
-                    sub.start.seconds += sub.start.milliseconds // 1000
-                    sub.start.milliseconds %= 1000
-                if sub.end.milliseconds >= 1000:
-                    sub.end.seconds += sub.end.milliseconds // 1000
-                    sub.end.milliseconds %= 1000
-                
-                # Handle minutes and hours overflow
-                if sub.start.seconds >= 60:
-                    sub.start.minutes += sub.start.seconds // 60
-                    sub.start.seconds %= 60
-                if sub.end.seconds >= 60:
-                    sub.end.minutes += sub.end.seconds // 60
-                    sub.end.seconds %= 60
-                
-                if sub.start.minutes >= 60:
-                    sub.start.hours += sub.start.minutes // 60
-                    sub.start.minutes %= 60
-                if sub.end.minutes >= 60:
-                    sub.end.hours += sub.end.minutes // 60
-                    sub.end.minutes %= 60
+        # Load font
+        try:
+            font_path = "assets/fonts/Montserrat-Bold.ttf"
+            if not os.path.exists(font_path):
+                font_path = "C:/Windows/Fonts/Arial.ttf"  # Fallback for Windows
             
-            log_info(f"Applied {start_padding}s offset to all subtitles for start padding")
-        
-        # Create subtitle clips with modern styling
+            # Create different font sizes for different text lengths
+            large_font = ImageFont.truetype(font_path, 80)  # For short text
+            medium_font = ImageFont.truetype(font_path, 70)  # For medium text
+            small_font = ImageFont.truetype(font_path, 60)   # For long text
+        except:
+            large_font = ImageFont.load_default()
+            medium_font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+            
+        # Create subtitle clips
         subtitle_clips = []
         video_width = base_video.w
         video_height = base_video.h
         
+        # Verify video dimensions
+        log_info(f"Video dimensions: {video_width}x{video_height}")
+        
+        # Calculate the vertical position for subtitles (center of the screen)
+        vertical_position = 0.5  # Center of the screen
+        
         for i, sub in enumerate(subs):
-            # Skip empty subtitles
-            if not sub.text.strip():
-                continue
-                
-            start_time = sub.start.ordinal / 1000.0  # Convert to seconds
-            end_time = sub.end.ordinal / 1000.0
-            
-            # Calculate duration explicitly
-            duration = end_time - start_time
-            
-            # Skip if duration is invalid
-            if duration <= 0:
-                log_warning(f"Skipping subtitle {i+1} with invalid duration: {duration}s")
-                continue
-                
-            # Clean the text (remove HTML tags and unescape entities)
-            clean_text = html.unescape(sub.text)
-            clean_text = re.sub(r'<[^>]+>', '', clean_text)
-            
             try:
-                # Create a modern, stylish text clip with better visibility
-                fontsize = 52  # Slightly larger for better readability
-                if len(clean_text) > 50:  # Reduce font size for longer text
-                    fontsize = 44
+                # Skip empty subtitles
+                if not sub.text.strip():
+                    continue
+                    
+                # Calculate timing
+                start_time = sub.start.ordinal / 1000.0  # Convert to seconds
+                end_time = sub.end.ordinal / 1000.0
+                duration = end_time - start_time
                 
-                # Semi-transparent background for better readability
-                bg_color = 'rgba(0,0,0,0.75)'  # More opaque for better readability
+                # Skip if duration is invalid
+                if duration <= 0:
+                    continue
+                    
+                # Clean the text
+                text = html.unescape(sub.text)
+                text = re.sub(r'<[^>]+>', '', text)
+                text = re.sub(r"\.'\]$", "", text)
+                text = text.strip()
                 
-                # Create modern text clip with MoviePy
-                txt_clip = TextClip(
-                    clean_text,
-                    fontsize=fontsize,
-                    font='Arial-Bold',  # Bold font for better visibility
-                    color='white',
-                    bg_color=bg_color,
-                    size=(video_width * 0.9, None),  # 90% of video width
-                    method='caption',
-                    align='center', 
-                    stroke_width=2.0,  # Thicker stroke for better visibility
-                    stroke_color='black'
-                )
+                if not text:
+                    continue
                 
-                # Add some margin and a slight zoom animation for "sing-along" effect
-                txt_clip = txt_clip.margin(top=12, bottom=12, left=20, right=20)
+                # Choose font size based on text length
+                if len(text) < 20:
+                    font = large_font
+                elif len(text) < 40:
+                    font = medium_font
+                else:
+                    font = small_font
+                    
+                # Create image for subtitle - use full width and 1/3 of height
+                img_height = int(video_height / 3)  # Use 1/3 of the video height for subtitle area
+                img = Image.new('RGBA', (video_width, img_height), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
                 
-                # Add a subtle fade in/out for smooth transitions (sing-along style)
-                fade_duration = min(0.3, (end_time - start_time) / 4)  # 0.3s or 1/4 of duration, whichever is shorter
-                txt_clip = txt_clip.fadein(fade_duration).fadeout(fade_duration)
+                # Calculate text size and position
+                text_bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = text_bbox[2] - text_bbox[0]
+                text_height = text_bbox[3] - text_bbox[1]
                 
-                # Position subtitles near the bottom center with a slight "karaoke" animation
-                position = ('center', 0.85)  # Position slightly lower for modern look
+                # If text is too wide, split it into multiple lines
+                if text_width > video_width - 100:  # Leave 50px padding on each side
+                    words = text.split()
+                    lines = []
+                    current_line = []
+                    
+                    for word in words:
+                        test_line = ' '.join(current_line + [word])
+                        test_bbox = draw.textbbox((0, 0), test_line, font=font)
+                        test_width = test_bbox[2] - test_bbox[0]
+                        
+                        if test_width <= video_width - 100 or not current_line:
+                            current_line.append(word)
+                        else:
+                            lines.append(' '.join(current_line))
+                            current_line = [word]
+                    
+                    if current_line:
+                        lines.append(' '.join(current_line))
+                    
+                    # Recalculate image height based on number of lines
+                    line_height = text_height + 10  # Add 10px spacing between lines
+                    total_text_height = line_height * len(lines)
+                    
+                    # Create new image with appropriate height
+                    img = Image.new('RGBA', (video_width, total_text_height + 80), (0, 0, 0, 0))
+                    draw = ImageDraw.Draw(img)
+                    
+                    # Draw background rectangle with rounded corners
+                    padding = 20
+                    bg_x = 50  # 50px from left edge
+                    bg_y = 10  # 10px from top
+                    bg_width = video_width - 100  # 50px padding on each side
+                    bg_height = total_text_height + 60  # Add padding
+                    
+                    # Draw semi-transparent black background
+                    draw.rounded_rectangle(
+                        [(bg_x, bg_y), (bg_x + bg_width, bg_y + bg_height)],
+                        radius=15,
+                        fill=(0, 0, 0, 180)
+                    )
+                    
+                    # Draw each line of text
+                    y_offset = 40  # Start 40px from top of image
+                    for line in lines:
+                        line_bbox = draw.textbbox((0, 0), line, font=font)
+                        line_width = line_bbox[2] - line_bbox[0]
+                        x = (video_width - line_width) // 2
+                        
+                        # Draw text shadow
+                        shadow_offset = 2
+                        draw.text((x + shadow_offset, y_offset + shadow_offset), line, font=font, fill=(0, 0, 0, 255))
+                        
+                        # Draw main text
+                        draw.text((x, y_offset), line, font=font, fill=(255, 255, 255, 255))
+                        
+                        y_offset += line_height
+                else:
+                    # Center the text
+                    x = (video_width - text_width) // 2
+                    y = (img_height - text_height) // 2
+                    
+                    # Draw background rectangle with rounded corners
+                    padding = 20
+                    bg_x = x - padding
+                    bg_y = y - padding
+                    bg_width = text_width + (padding * 2)
+                    bg_height = text_height + (padding * 2)
+                    
+                    # Draw semi-transparent black background
+                    draw.rounded_rectangle(
+                        [(bg_x, bg_y), (bg_x + bg_width, bg_y + bg_height)],
+                        radius=15,
+                        fill=(0, 0, 0, 180)
+                    )
+                    
+                    # Draw text shadow
+                    shadow_offset = 2
+                    draw.text((x + shadow_offset, y + shadow_offset), text, font=font, fill=(0, 0, 0, 255))
+                    
+                    # Draw main text
+                    draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
                 
-                # Set precise timing for better sync with audio
-                # This ensures the duration is properly set
-                txt_clip = txt_clip.set_position(position).set_start(start_time).set_end(end_time).set_duration(duration)
+                # Convert PIL image to numpy array
+                img_array = np.array(img)
                 
-                # Add to the subtitle clips list
+                # Create clip from image
+                txt_clip = ImageClip(img_array)
+                txt_clip = txt_clip.set_duration(duration)
+                txt_clip = txt_clip.set_start(start_time + start_padding)
+                
+                # Position at the center of the screen
+                txt_clip = txt_clip.set_position(('center', vertical_position), relative=True)
+                
+                # Add fade effects
+                txt_clip = txt_clip.crossfadein(0.3).crossfadeout(0.3)
+                
                 subtitle_clips.append(txt_clip)
                 
-                # Log progress but not for every subtitle to avoid cluttering output
+                # Log progress
                 if i == 0 or i == len(subs) - 1 or i % max(5, len(subs) // 5) == 0:
                     log_info(f"Created subtitle {i+1}/{len(subs)}")
-                
+                    
             except Exception as e:
                 log_warning(f"Error creating subtitle {i+1}: {str(e)}")
                 continue
         
         # Check if we created any subtitle clips
         if not subtitle_clips:
-            log_warning("No valid subtitle clips were created, returning base video")
+            log_warning("No valid subtitle clips were created")
             return base_video
         
         # Combine all subtitle clips with the base video

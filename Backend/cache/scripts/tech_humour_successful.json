@@ -1,0 +1,15 @@
+[
+  {
+    "script": "Ever wonder why coffee can make some folks sleepy instead of wired? Here\u2019s the scoop: When caffeine blocks adenosine, your body doesn\u2019t stop producing it. So when the caffeine wears off, there\u2019s a surplus of adenosine that makes you feel even more tired! Next time your coffee seems to backfire with a snooze effect, remember, it\u2019s just your body catching up on its adenosine backup. So, maybe grab a water instead of a second cup! Stay alert out there!",
+    "metrics": {
+      "lines": "1/12 max",
+      "words": "79/150 max",
+      "estimated_duration": "37.9s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": true,
+      "has_value_prop": false
+    },
+    "timestamp": 1741788973.889163
+  }
+]

@@ -43,73 +43,183 @@ from voice_diversification import VoiceDiversification
 
 class AudioManager:
     def __init__(self):
+        """Initialize the audio manager"""
+        from video import log_info, log_success, log_error, log_warning
+        
+        # TTS models
+        self.tts_model = None
+        self.tts_synthesizer = None
+        
+        # Store speaker information once initialized
+        self.english_speakers = []
+        self.male_speakers = []
+        self.female_speakers = []
+        self.all_speakers = []
+        self.available_languages = []
+        self.tts_initialized = False
+        
+        # Voice configuration
         self.voices = {
-            'tech_humor': {
+            'default': {
+                'style': 'neutral',
                 'voices': {
-                    'nova': {'weight': 3, 'description': 'Energetic female, perfect for tech humor'},
-                    'echo': {'weight': 3, 'description': 'Dynamic male, great for casual tech content'}
-                },
+                    'nova': {'weight': 1},
+                    'alloy': {'weight': 1},
+                    'echo': {'weight': 1},
+                    'fable': {'weight': 1},
+                    'onyx': {'weight': 1},
+                    'shimmer': {'weight': 1}
+                }
+            },
+            'tech_humor': {
                 'style': 'humorous',
-                'prompt': "Read this text with an energetic, playful tone and a sense of humor."
+                'voices': {
+                    'echo': {'weight': 3},
+                    'onyx': {'weight': 2},
+                    'alloy': {'weight': 1}
+                }
             },
             'ai_money': {
-                'voices': {
-                    'onyx': {'weight': 3, 'description': 'Professional male voice'},
-                    'shimmer': {'weight': 2, 'description': 'Clear female voice'}
-                },
                 'style': 'professional',
-                'prompt': "Deliver the following content in a clear, confident, and professional manner."
-            },
-            'default': {
                 'voices': {
-                    'echo': {'weight': 2, 'description': 'Balanced male voice'},
-                    'nova': {'weight': 2, 'description': 'Engaging female voice'}
-                },
-                'style': 'casual',
-                'prompt': "Please read the following text in a natural, conversational tone."
+                    'onyx': {'weight': 3},
+                    'alloy': {'weight': 2},
+                    'echo': {'weight': 1}
+                }
+            },
+            'baby_tips': {
+                'style': 'warm',
+                'voices': {
+                    'nova': {'weight': 3},
+                    'shimmer': {'weight': 2},
+                    'fable': {'weight': 1}
+                }
+            },
+            'quick_meals': {
+                'style': 'enthusiastic',
+                'voices': {
+                    'shimmer': {'weight': 3},
+                    'nova': {'weight': 2},
+                    'fable': {'weight': 1}
+                }
+            },
+            'fitness_motivation': {
+                'style': 'motivational',
+                'voices': {
+                    'echo': {'weight': 3},
+                    'onyx': {'weight': 2},
+                    'alloy': {'weight': 1}
+                }
             }
         }
         
-        # Initialize voice diversification system
-        self.voice_diversifier = VoiceDiversification()
-        
-        self.voiceovers_dir = "temp/tts"
-        os.makedirs(self.voiceovers_dir, exist_ok=True)
-        
-        # Map content types to emotions
-        self.content_emotions = {
-            'tech_humor': ['cheerful', 'friendly'],
-            'ai_money': ['professional', 'serious'],
-            'baby_tips': ['friendly', 'cheerful'],
-            'quick_meals': ['cheerful', 'friendly'],
-            'fitness_motivation': ['professional', 'serious'],
-            'default': ['neutral', 'friendly']
+        # Emotion mapping for Coqui voices
+        self.emotion_map = {
+            'tech_humor': ['humorous', 'cheerful', 'excited', 'surprised'],
+            'ai_money': ['professional', 'confident', 'serious', 'energetic'],
+            'baby_tips': ['warm', 'friendly', 'calm', 'cheerful'],
+            'quick_meals': ['energetic', 'cheerful', 'excited', 'friendly'],
+            'fitness_motivation': ['energetic', 'excited', 'professional', 'confident'],
+            'default': ['neutral', 'professional', 'friendly']
         }
         
-        # Initialize OpenAI client
-        load_dotenv()
-        self.openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        
-        # Initialize TTS model and synthesizer attributes with None
-        # They will be properly initialized when needed
-        self.tts_model = None
-        self.tts_synthesizer = None
+        # Initialize voice diversification system
         self.voice_language_map = {
             # Default language mapping for voices
             "default": "en"
         }
         
-        # Try to initialize Coqui TTS if available
+        # Initialize OpenAI client if API key is available
+        self.openai_client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Try to initialize TTS model if possible
         try:
-            from TTS.api import TTS
-            from video import log_info, log_warning
+            self._initialize_tts_model()
+        except Exception as e:
+            print(colored(f"⚠️ Could not initialize TTS model during startup: {str(e)}", "yellow"))
+            print(colored(f"ℹ️ TTS model will be initialized on first use", "blue"))
+    
+    def _initialize_tts_model(self):
+        """Initialize the TTS model and classify speakers (only once)"""
+        from video import log_info, log_success, log_error, log_warning
+        
+        # Skip if already initialized
+        if self.tts_initialized:
+            return True
             
+        try:
             log_info("Initializing Coqui TTS (may take a moment)")
-            # We'll initialize these on first use to avoid slow startup
-            # The actual model loading will happen when first needed
-        except ImportError:
-            from video import log_warning
-            log_warning("Coqui TTS not installed. Will use OpenAI TTS instead.")
+            from TTS.api import TTS
+            import torch
+            
+            # Check if CUDA is available
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            log_info(f"Using device: {device} for TTS")
+            
+            # Use a faster model for better performance
+            self.tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+            self.tts_synthesizer = self.tts_model
+            
+            # Store all available speakers
+            if hasattr(self.tts_model, "speakers") and self.tts_model.speakers:
+                self.all_speakers = self.tts_model.speakers
+                log_info(f"Found {len(self.all_speakers)} available speakers")
+                
+                # Identify English speakers (based on our analysis)
+                # First, look for speakers with English in their name
+                for speaker in self.all_speakers:
+                    if any(en_indicator in speaker.lower() for en_indicator in ["en_", "en-", "english"]):
+                        self.english_speakers.append(speaker)
+                
+                # If no obvious English speakers found, look for ones with "en" language
+                if not self.english_speakers and hasattr(self.tts_model, "languages") and "en" in self.tts_model.languages:
+                    # Based on our analysis, try these specific speakers that seem to handle English well
+                    english_candidates = [
+                        "Ana Florence", "Brenda Stern", "Henriette Usha", "Sofia Hellen",
+                        "Damien Black", "Viktor Menelaos", "Zofija Kendrick", "Baldur Sanjin"
+                    ]
+                    
+                    for candidate in english_candidates:
+                        if candidate in self.all_speakers:
+                            self.english_speakers.append(candidate)
+                
+                # If we still don't have English speakers, treat all speakers as potential English speakers
+                # since the model supports English language
+                if not self.english_speakers and "en" in self.tts_model.languages:
+                    log_info("No specific English speakers found, using any speaker with English language")
+                    self.english_speakers = self.all_speakers
+                
+                log_info(f"Found {len(self.english_speakers)} suitable English speakers")
+                
+                # Simple gender classification - better than before but still basic
+                for speaker in self.all_speakers:
+                    speaker_lower = speaker.lower()
+                    if "female" in speaker_lower or "woman" in speaker_lower:
+                        self.female_speakers.append(speaker)
+                    elif "male" in speaker_lower or "man" in speaker_lower:
+                        self.male_speakers.append(speaker)
+                    # For remaining speakers, use analysis of typical names
+                    elif any(female_name in speaker_lower for female_name in ["ana", "brenda", "daisy", "alison", "sofia", "henriette", "zofija"]):
+                        self.female_speakers.append(speaker)
+                    elif any(male_name in speaker_lower for male_name in ["damien", "viktor", "eugenio", "ferran", "baldur"]):
+                        self.male_speakers.append(speaker)
+                
+                log_info(f"Classified {len(self.male_speakers)} male voices and {len(self.female_speakers)} female voices")
+                log_info(f"Total available voices: {len(self.all_speakers)}")
+            
+            # Store available languages
+            if hasattr(self.tts_model, "languages") and self.tts_model.languages:
+                self.available_languages = self.tts_model.languages
+                log_info(f"Available languages: {self.available_languages}")
+            
+            # Mark as initialized
+            self.tts_initialized = True
+            log_success("Coqui TTS model initialized successfully")
+            return True
+            
+        except Exception as e:
+            log_error(f"Failed to initialize Coqui TTS: {str(e)}")
+            return False
 
     def select_voice(self, channel_type):
         """Select appropriate voice based on content type"""
@@ -132,73 +242,62 @@ class AudioManager:
         """Select a Coqui voice based on channel type and gender preference"""
         from video import log_info, log_warning, log_error
         
-        emotion_map = {
-            'tech_humor': ['humorous', 'cheerful', 'excited', 'surprised'],
-            'ai_money': ['professional', 'confident', 'serious', 'energetic'],
-            'baby_tips': ['warm', 'friendly', 'calm', 'cheerful'],
-            'quick_meals': ['energetic', 'cheerful', 'excited', 'friendly'],
-            'fitness_motivation': ['energetic', 'excited', 'professional', 'confident'],
-            'default': ['neutral', 'professional', 'friendly']
-        }
+        # Make sure TTS is initialized
+        if not self.tts_initialized:
+            self._initialize_tts_model()
         
-        try:
-            # Get list of emotions for this channel type
-            emotion_options = emotion_map.get(channel_type, emotion_map['default'])
-            
-            # Select a random emotion from the options for variety
-            emotion = random.choice(emotion_options)
-            
-            # Check if we have a cached voice for this channel type
-            cache_key = f"{channel_type}_{gender if gender else 'any'}"
-            if hasattr(self, 'voice_cache') and cache_key in self.voice_cache:
-                voice, stored_emotion = self.voice_cache[cache_key]
-                log_info(f"Using cached voice: {voice} (emotion: {stored_emotion})")
-                return voice, stored_emotion
-            
-            # Initialize voice cache if it doesn't exist
-            if not hasattr(self, 'voice_cache'):
-                self.voice_cache = {}
-            
-            # Generate appropriate voice name for this channel type
-            voices = {
-                'tech_humor': ['Mark Davis', 'Lisa Johnson', 'Alex Turner'],
-                'ai_money': ['Aaron Dreschner', 'Baldur Sanjin', 'Sophia Chen'],
-                'baby_tips': ['Emma Wilson', 'Sarah Thompson', 'Michael Parker'],
-                'quick_meals': ['Jamie Oliver', 'Rachel Green', 'Gordon Smith'],
-                'fitness_motivation': ['David Strong', 'Michelle Power', 'Tyler Fitness'],
-                'default': ['Narrator', 'Presenter', 'Guide']
-            }
-            
-            # Select voice options for the channel
-            voice_options = voices.get(channel_type, voices['default'])
-            
-            # Filter by gender if specified
-            if gender:
-                # Simple gender filtering based on common name patterns
-                if gender.lower() == 'male':
-                    filtered_voices = [v for v in voice_options if not any(female_name in v for female_name in 
-                                      ['Lisa', 'Emma', 'Sarah', 'Rachel', 'Michelle', 'Sophia'])]
-                elif gender.lower() == 'female':
-                    filtered_voices = [v for v in voice_options if any(female_name in v for female_name in 
-                                      ['Lisa', 'Emma', 'Sarah', 'Rachel', 'Michelle', 'Sophia'])]
-                else:
-                    filtered_voices = voice_options
-                    
-                if filtered_voices:
-                    voice_options = filtered_voices
-            
-            # Select a random voice
-            voice = random.choice(voice_options)
-            
-            # Cache the selected voice and emotion
-            self.voice_cache[cache_key] = (voice, emotion)
-            
+        # Get list of emotions for this channel type
+        emotion_options = self.emotion_map.get(channel_type, self.emotion_map['default'])
+        
+        # Select a random emotion from the options for variety
+        emotion = random.choice(emotion_options)
+        
+        # Determine gender preference based on channel type if not specified
+        if gender is None:
+            if channel_type in ['ai_money', 'tech_humor', 'fitness_motivation']:
+                gender = 'male'  # These channels typically use male voices
+            elif channel_type in ['baby_tips', 'quick_meals']:
+                gender = 'female'  # These channels typically use female voices
+            else:
+                gender = random.choice(['male', 'female'])  # Random for other channels
+        
+        # Select a voice based on gender preference
+        voice_candidates = []
+        if gender == 'male' and self.male_speakers:
+            # Try to find English male speakers first
+            english_male = [s for s in self.male_speakers if s in self.english_speakers]
+            if english_male:
+                voice_candidates = english_male
+                log_info(f"Using English male voice pool ({len(voice_candidates)} voices)")
+            else:
+                voice_candidates = self.male_speakers
+                log_info(f"Using any male voice pool ({len(voice_candidates)} voices)")
+        elif gender == 'female' and self.female_speakers:
+            # Try to find English female speakers first
+            english_female = [s for s in self.female_speakers if s in self.english_speakers]
+            if english_female:
+                voice_candidates = english_female
+                log_info(f"Using English female voice pool ({len(voice_candidates)} voices)")
+            else:
+                voice_candidates = self.female_speakers
+                log_info(f"Using any female voice pool ({len(voice_candidates)} voices)")
+        elif self.english_speakers:
+            # No gender preference or no voices for that gender, use any English speaker
+            voice_candidates = self.english_speakers
+            log_info(f"Using any English voice pool ({len(voice_candidates)} voices)")
+        else:
+            # Fallback to any available speaker
+            voice_candidates = self.all_speakers
+            log_info(f"Using any available voice pool ({len(voice_candidates)} voices)")
+        
+        # Select a random voice from the candidates
+        if voice_candidates:
+            voice = random.choice(voice_candidates)
             log_info(f"Selected Coqui voice: {voice} (emotion: {emotion})")
             return voice, emotion
-                
-        except Exception as e:
-            log_error(f"Error selecting Coqui voice: {str(e)}")
-            return "Narrator", "neutral"
+        else:
+            log_warning("No suitable voices found, using default voice")
+            return "Baldur Sanjin", emotion  # Default voice as fallback
 
     def enhance_audio(self, audio_segment):
         """Enhance audio quality"""
@@ -225,240 +324,100 @@ class AudioManager:
         
         try:
             # Initialize TTS model if not already done
-            if self.tts_model is None or self.tts_synthesizer is None:
-                try:
-                    log_info("Initializing Coqui TTS model (first use)")
-                    from TTS.api import TTS
-                    import torch
-                    
-                    # Check if CUDA is available
-                    device = "cuda" if torch.cuda.is_available() else "cpu"
-                    log_info(f"Using device: {device} for TTS")
-                    
-                    # Use a faster model for better performance
-                    self.tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
-                    self.tts_synthesizer = self.tts_model
-                    
-                    # Get available speakers and languages
-                    if hasattr(self.tts_model, "speakers") and self.tts_model.speakers:
-                        log_info(f"Found {len(self.tts_model.speakers)} available speakers")
-                        
-                        # Identify English speakers (based on our analysis)
-                        english_speakers = []
-                        
-                        # First, look for speakers with English in their name
-                        for speaker in self.tts_model.speakers:
-                            if any(en_indicator in speaker.lower() for en_indicator in ["en_", "en-", "english"]):
-                                english_speakers.append(speaker)
-                        
-                        # If no obvious English speakers found, look for ones with "en" language
-                        if not english_speakers and hasattr(self.tts_model, "languages") and "en" in self.tts_model.languages:
-                            # Based on our analysis, try these specific speakers that seem to handle English well
-                            english_candidates = [
-                                "Ana Florence", "Brenda Stern", "Henriette Usha", "Sofia Hellen",
-                                "Damien Black", "Viktor Menelaos", "Zofija Kendrick"
-                            ]
-                            
-                            for candidate in english_candidates:
-                                if candidate in self.tts_model.speakers:
-                                    english_speakers.append(candidate)
-                        
-                        # If we still don't have English speakers, treat all speakers as potential English speakers
-                        # since the model supports English language
-                        if not english_speakers and "en" in self.tts_model.languages:
-                            log_info("No specific English speakers found, using any speaker with English language")
-                            english_speakers = self.tts_model.speakers
-                        
-                        log_info(f"Found {len(english_speakers)} suitable English speakers")
-                        
-                        # Simple gender classification - better than before but still basic
-                        male_speakers = []
-                        female_speakers = []
-                        
-                        for speaker in self.tts_model.speakers:
-                            speaker_lower = speaker.lower()
-                            if "female" in speaker_lower or "woman" in speaker_lower:
-                                female_speakers.append(speaker)
-                            elif "male" in speaker_lower or "man" in speaker_lower:
-                                male_speakers.append(speaker)
-                            # For remaining speakers, use analysis of typical names
-                            elif any(female_name in speaker_lower for female_name in ["ana", "brenda", "daisy", "alison", "sofia", "henriette", "zofija"]):
-                                female_speakers.append(speaker)
-                            elif any(male_name in speaker_lower for male_name in ["damien", "viktor", "eugenio", "ferran", "baldur"]):
-                                male_speakers.append(speaker)
-                        
-                        log_info(f"Identified {len(male_speakers)} male voices and {len(female_speakers)} female voices")
-                    
-                    if hasattr(self.tts_model, "languages") and self.tts_model.languages:
-                        log_info(f"Available languages: {self.tts_model.languages}")
-                    
-                    # Set up voice language map
-                    self.voice_language_map = {
-                        # Default mappings
-                        "default": "en",
-                        # Add more voice-to-language mappings as needed
-                    }
-                    
-                    log_success("Coqui TTS model initialized successfully")
-                except Exception as init_error:
-                    log_error(f"Failed to initialize Coqui TTS: {str(init_error)}")
+            if not self.tts_initialized:
+                if not self._initialize_tts_model():
+                    log_error("Failed to initialize TTS model")
                     return None
             
             output_path = f"temp/tts/{voice}_{emotion}_{int(time.time())}.wav"
             os.makedirs("temp/tts", exist_ok=True)
             
+            # Extract global style if present
+            global_style = emotion
+            style_match = re.search(r'<style="([^"]+)">(.*?)</style>', text)
+            if style_match:
+                global_style = style_match.group(1)
+                text = style_match.group(2)
+                log_info(f"Using global style: {global_style}")
+            
             # Process text in smaller chunks for better quality
-            sentences = text.split('.')
-            sentences = [s.strip() + '.' for s in sentences if s.strip()]
+            # First, extract sentences with their emotion tags
+            tagged_sentences = []
             
-            log_info(f"Using Coqui TTS with voice: {voice} (emotion: {emotion}, speed: {speed})")
-            
-            # Get a list of available speakers from the model
-            available_speakers = []
-            if hasattr(self.tts_model, "speakers") and self.tts_model.speakers:
-                available_speakers = self.tts_model.speakers
-            
-            # Select an appropriate speaker (preferably English)
-            selected_speaker = None
-            
-            # Determine gender preference from voice name
-            gender_preference = None
-            if 'lisa' in voice.lower() or 'sarah' in voice.lower() or 'emma' in voice.lower() or 'female' in voice.lower():
-                gender_preference = 'female'
-                log_info("Preferring female voice based on requested voice name")
-            elif 'mark' in voice.lower() or 'aaron' in voice.lower() or 'male' in voice.lower():
-                gender_preference = 'male'
-                log_info("Preferring male voice based on requested voice name")
-            
-            # Get the previously analyzed speakers
-            english_speakers = []
-            male_speakers = []
-            female_speakers = []
-            
-            # Reanalyze only if we don't have this information yet
-            if hasattr(self.tts_model, "speakers") and self.tts_model.speakers:
-                # Identify English speakers (based on our analysis)
-                for speaker in self.tts_model.speakers:
-                    if any(en_indicator in speaker.lower() for en_indicator in ["en_", "en-", "english"]):
-                        english_speakers.append(speaker)
+            # Extract tagged sentences
+            tag_pattern = r'<(question|emphasis|excited|sad|serious)>(.*?)</\1>'
+            last_end = 0
+            for match in re.finditer(tag_pattern, text):
+                # If there's untagged text before this match, add it
+                if match.start() > last_end:
+                    untagged = text[last_end:match.start()].strip()
+                    if untagged:
+                        tagged_sentences.append((untagged, global_style))
                 
-                # If no obvious English speakers found, check for known English speakers
-                if not english_speakers and hasattr(self.tts_model, "languages") and "en" in self.tts_model.languages:
-                    english_candidates = [
-                        "Ana Florence", "Brenda Stern", "Henriette Usha", "Sofia Hellen",
-                        "Damien Black", "Viktor Menelaos", "Zofija Kendrick"
-                    ]
-                    
-                    for candidate in english_candidates:
-                        if candidate in self.tts_model.speakers:
-                            english_speakers.append(candidate)
+                # Add the tagged sentence with its emotion
+                tag_type = match.group(1)
+                sentence = match.group(2).strip()
                 
-                # Simple gender classification
-                for speaker in self.tts_model.speakers:
-                    speaker_lower = speaker.lower()
-                    if any(female_name in speaker_lower for female_name in ["ana", "brenda", "daisy", "alison", "sofia", "henriette", "zofija"]):
-                        female_speakers.append(speaker)
-                    elif any(male_name in speaker_lower for male_name in ["damien", "viktor", "eugenio", "ferran", "baldur"]):
-                        male_speakers.append(speaker)
+                # Map tag types to emotions
+                emotion_map = {
+                    'question': 'curious',
+                    'emphasis': 'energetic',
+                    'excited': 'excited',
+                    'sad': 'sad',
+                    'serious': 'serious'
+                }
+                
+                sentence_emotion = emotion_map.get(tag_type, global_style)
+                tagged_sentences.append((sentence, sentence_emotion))
+                
+                last_end = match.end()
             
-            # Select based on gender preference and language
-            if gender_preference == 'female' and female_speakers:
-                # Try to find English female speakers first
-                english_female = [s for s in female_speakers if s in english_speakers]
-                if english_female:
-                    selected_speaker = random.choice(english_female)
-                    log_info(f"Selected English female speaker: {selected_speaker}")
-                else:
-                    # Just use any female speaker
-                    selected_speaker = random.choice(female_speakers)
-                    log_info(f"Selected female speaker: {selected_speaker}")
-            elif gender_preference == 'male' and male_speakers:
-                # Try to find English male speakers first
-                english_male = [s for s in male_speakers if s in english_speakers]
-                if english_male:
-                    selected_speaker = random.choice(english_male)
-                    log_info(f"Selected English male speaker: {selected_speaker}")
-                else:
-                    # Just use any male speaker
-                    selected_speaker = random.choice(male_speakers)
-            elif english_speakers:
-                # No gender preference, but use English speakers if available
-                selected_speaker = random.choice(english_speakers)
-                log_info(f"Selected English speaker: {selected_speaker}")
-            elif available_speakers:
-                # Fallback to any available speaker
-                selected_speaker = random.choice(available_speakers)
-                log_info(f"Selected speaker: {selected_speaker}")
-            else:
-                # No speakers available
-                selected_speaker = None
-                log_warning("No speakers available in the model")
+            # Add any remaining text
+            if last_end < len(text):
+                remaining = text[last_end:].strip()
+                if remaining:
+                    tagged_sentences.append((remaining, global_style))
             
-            # Get available languages and ensure we use English
-            language = "en"  # Default to English
-            if hasattr(self.tts_model, "languages") and self.tts_model.languages:
-                if "en" in self.tts_model.languages:
-                    language = "en"
-                else:
-                    # Just use the first language if English isn't available
-                    language = self.tts_model.languages[0]
-                log_info(f"Using language: {language}")
+            # If no tagged sentences were found, use the original text
+            if not tagged_sentences:
+                # Split by sentence endings
+                sentences = re.split(r'(?<=[.!?])\s+', text)
+                tagged_sentences = [(s.strip(), global_style) for s in sentences if s.strip()]
             
-            # For more natural-sounding speech, group sentences together but not too many
-            chunks = []
-            current_chunk = ""
-            for sentence in sentences:
-                if len(current_chunk) + len(sentence) < 300:  # Keep chunks reasonably sized
-                    current_chunk += " " + sentence
-                else:
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-                    current_chunk = sentence
-            
-            if current_chunk:  # Add the last chunk
-                chunks.append(current_chunk.strip())
-            
-            log_info(f"Processing {len(chunks)} sentences for better TTS quality")
+            log_info(f"Processing {len(tagged_sentences)} sentences with emotion for better TTS quality")
             
             # Generate audio for each chunk
             chunk_audios = []
-            for i, chunk in enumerate(chunks):
-                log_step(i+1, len(chunks), f"Generating speech chunk {i+1}/{len(chunks)}")
+            for i, (sentence, sentence_emotion) in enumerate(tagged_sentences):
+                log_step(i+1, len(tagged_sentences), f"Generating speech chunk {i+1}/{len(tagged_sentences)} with emotion: {sentence_emotion}")
                 
                 # Add emotion-specific enhancements to the text
-                enhanced_text = self._enhance_text_for_emotion(chunk, emotion)
+                enhanced_text = self._enhance_text_for_emotion(sentence, sentence_emotion)
                 
                 # Adjust speed based on emotion and content type
                 current_speed = speed
-                if emotion == "excited" or emotion == "energetic":
+                if sentence_emotion == "excited" or sentence_emotion == "energetic":
                     log_info("Using faster speed for energetic/excited emotion")
                     current_speed *= 1.15
-                elif emotion == "calm" or emotion == "relaxed":
-                    log_info("Using slower speed for calm/relaxed emotion")
+                elif sentence_emotion == "sad" or sentence_emotion == "serious":
+                    log_info("Using slower speed for sad/serious emotion")
                     current_speed *= 0.9
+                elif sentence_emotion == "curious":
+                    # For questions, slightly slower with rising intonation
+                    current_speed *= 0.95
                 
                 # Generate TTS
                 chunk_path = f"temp/tts/sentence_{i}_{int(time.time())}.wav"
                 
                 try:
-                    # Always use English language for better quality
-                    if selected_speaker is not None:
-                        # Use full parameters
-                        self.tts_synthesizer.tts_to_file(
-                            text=enhanced_text,
-                            file_path=chunk_path,
-                            speaker=selected_speaker,
-                            language="en",  # Always use English
-                            speed=current_speed
-                        )
-                    else:
-                        # Try without speaker parameter (but still with English)
-                        self.tts_synthesizer.tts_to_file(
-                            text=enhanced_text,
-                            file_path=chunk_path,
-                            language="en",  # Always use English
-                            speed=current_speed
-                        )
+                    # Use the voice parameter directly - it should be a valid speaker name
+                    self.tts_synthesizer.tts_to_file(
+                        text=enhanced_text,
+                        file_path=chunk_path,
+                        speaker=voice,
+                        language="en",
+                        speed=current_speed
+                    )
                     log_success(f"Generated voice file: {chunk_path}")
                     chunk_audios.append(chunk_path)
                 except Exception as chunk_error:
@@ -466,20 +425,12 @@ class AudioManager:
                     # Try with simpler parameters as fallback
                     try:
                         log_info("Trying fallback TTS method")
-                        if selected_speaker is not None:
-                            self.tts_synthesizer.tts_to_file(
-                                text=enhanced_text,
-                                file_path=chunk_path,
-                                speaker=selected_speaker,
-                                language="en"  # Always use English
-                            )
-                        else:
-                            # Ultimate fallback with minimal parameters (but still with English)
-                            self.tts_synthesizer.tts_to_file(
-                                text=enhanced_text,
-                                file_path=chunk_path,
-                                language="en"  # Always use English
-                            )
+                        self.tts_synthesizer.tts_to_file(
+                            text=enhanced_text,
+                            file_path=chunk_path,
+                            speaker=voice,
+                            language="en"
+                        )
                         log_success(f"Generated voice file with fallback method: {chunk_path}")
                         chunk_audios.append(chunk_path)
                     except Exception as fallback_error:
@@ -575,65 +526,23 @@ class AudioManager:
                 "pacing": "slow",
                 "description": "with a somber, reflective tone"
             },
-            "angry": {
+            "curious": {
                 "prefix": "",
-                "emphasis": "firmly",
-                "pacing": "intense",
-                "description": "with controlled intensity"
-            },
-            "fearful": {
-                "prefix": "",
-                "emphasis": "cautiously",
-                "pacing": "hesitant",
-                "description": "with concern and caution"
-            },
-            "surprised": {
-                "prefix": "",
-                "emphasis": "with astonishment",
+                "emphasis": "with curiosity",
                 "pacing": "varied",
-                "description": "with surprise and wonder"
-            },
-            "disgusted": {
-                "prefix": "",
-                "emphasis": "with distaste",
-                "pacing": "deliberate",
-                "description": "with clear disapproval"
-            },
-            "bored": {
-                "prefix": "",
-                "emphasis": "flatly",
-                "pacing": "slow",
-                "description": "with little enthusiasm"
-            },
-            "anxious": {
-                "prefix": "",
-                "emphasis": "nervously",
-                "pacing": "quick",
-                "description": "with a sense of urgency"
-            },
-            "relaxed": {
-                "prefix": "",
-                "emphasis": "easily",
-                "pacing": "slow",
-                "description": "in a relaxed, unhurried manner"
+                "description": "with a rising, inquisitive tone"
             },
             "energetic": {
                 "prefix": "",
                 "emphasis": "energetically",
                 "pacing": "fast",
-                "description": "with high energy and dynamism"
+                "description": "with high energy and emphasis"
             },
-            "warm": {
+            "helpful": {
                 "prefix": "",
-                "emphasis": "warmly",
-                "pacing": "gentle",
-                "description": "with warmth and caring"
-            },
-            "humorous": {
-                "prefix": "",
-                "emphasis": "with humor",
-                "pacing": "playful",
-                "description": "in a lighthearted, fun way"
+                "emphasis": "helpfully",
+                "pacing": "measured",
+                "description": "in a helpful, instructive manner"
             }
         }
         
@@ -642,6 +551,33 @@ class AudioManager:
         
         # Apply text enhancements based on the emotion pattern
         enhanced_text = text
+        
+        # Add SSML-like markers for better emotion expression
+        if emotion == "excited" or emotion == "energetic":
+            # Add emphasis to key words
+            words = enhanced_text.split()
+            for i, word in enumerate(words):
+                if len(word) > 4 and random.random() < 0.3:  # Randomly emphasize some longer words
+                    words[i] = f"<emphasis>{word}</emphasis>"
+            enhanced_text = " ".join(words)
+            
+        elif emotion == "curious":
+            # For questions, ensure rising intonation
+            if not enhanced_text.endswith("?"):
+                enhanced_text += "?"
+                
+        elif emotion == "sad":
+            # Add slight pauses for sad emotion
+            enhanced_text = enhanced_text.replace(", ", ", <break time='300ms'/> ")
+            
+        elif emotion == "serious":
+            # Add emphasis to important words
+            for important_word in ["important", "critical", "essential", "must", "key"]:
+                if important_word in enhanced_text.lower():
+                    enhanced_text = enhanced_text.replace(
+                        important_word, 
+                        f"<emphasis>{important_word}</emphasis>"
+                    )
         
         # Add emotion description as a prefix if needed for the TTS system
         log_info(f"Enhancing text {pattern['description']}")
@@ -1035,79 +971,95 @@ class VideoGenerator:
             return None
     
     def _clean_script_for_tts(self, script):
-        """Clean the script for TTS generation"""
-        # Clean up the script - remove line numbers and preserve emojis for display
-        # but the actual TTS will have emojis removed by the _clean_text method
-        clean_script = '\n'.join(
-            line.strip().strip('"') 
-            for line in script.split('\n') 
-            if line.strip() and not line[0].isdigit()
-        )
+        """Clean the script for TTS generation by removing emojis and special characters"""
+        # First, preserve the original script for display purposes
+        display_script = script
         
-        # Print the script before processing
-        print(colored(f"Original script for TTS:\n{clean_script}", "blue"))
+        # Remove emojis from TTS script using emoji library
+        import emoji
+        tts_script = emoji.replace_emoji(script, '')
         
-        # Remove section headers like "**HOOK:**", "Problem/Setup:", etc.
-        section_headers = [
-            "**Hook:**", "**Problem/Setup:**", "**Solution/Development:**", 
-            "**Result/Punchline:**", "**Call to action:**",
-            "Hook:", "Problem/Setup:", "Solution/Development:", 
-            "Result/Punchline:", "Call to action:",
-            "**Script:**", "Script:"
-        ]
+        # Remove trailing '.']' that causes strange sounds
+        tts_script = re.sub(r"\.\'\]$", "", tts_script)
+        tts_script = re.sub(r"\.\'\]\s*$", "", tts_script)  # Also catch if there's whitespace after
+        tts_script = re.sub(r"\[|\]|\'", "", tts_script)    # Remove any remaining brackets and quotes
         
-        # Define patterns to filter out
-        special_patterns = ["---", "***", "**", "##"]
+        # Clean up any double spaces or weird whitespace
+        tts_script = ' '.join(tts_script.split())
         
-        clean_script_lines = []
-        for line in clean_script.split('\n'):
-            line_to_add = line
-            skip_line = False
+        # Remove any remaining special characters except basic punctuation
+        tts_script = re.sub(r'[^a-zA-Z0-9\s.,!?-]', '', tts_script)
+        
+        # Clean up any multiple periods or spaces
+        tts_script = re.sub(r'\.+', '.', tts_script)
+        tts_script = re.sub(r'\s+', ' ', tts_script)
+        
+        # Remove trailing period that causes strange sounds in TTS
+        tts_script = tts_script.rstrip('.')
+        
+        # Enhance script with emotion and intonation markers
+        tts_script = self._enhance_script_with_emotion(tts_script)
+        
+        # Log the cleaning process
+        print(colored("Original script:", "cyan"))
+        print(script)
+        print(colored("\nCleaned script for TTS:", "green"))
+        print(tts_script)
+        
+        return tts_script.strip()
+        
+    def _enhance_script_with_emotion(self, script):
+        """Add emotion and intonation markers to the script for better TTS"""
+        # Don't modify if script is empty
+        if not script:
+            return script
             
-            # Skip lines that only contain special characters
-            if line.strip() in special_patterns or line.strip("-*#") == "":
-                skip_line = True
+        # Split into sentences for better processing
+        sentences = re.split(r'([.!?])', script)
+        sentences = [''.join(i) for i in zip(sentences[0::2], sentences[1::2] + [''] * (len(sentences[0::2]) - len(sentences[1::2])))]
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        enhanced_sentences = []
+        
+        for sentence in sentences:
+            # Skip empty sentences
+            if not sentence.strip():
                 continue
+                
+            # Detect sentence type and add appropriate markers
+            if sentence.endswith('?'):
+                # Questions - add rising intonation
+                enhanced = f"<question>{sentence}</question>"
+            elif sentence.endswith('!'):
+                # Exclamations - add emphasis
+                enhanced = f"<emphasis>{sentence}</emphasis>"
+            elif any(keyword in sentence.lower() for keyword in ['amazing', 'awesome', 'incredible', 'wow']):
+                # Enthusiastic statements
+                enhanced = f"<excited>{sentence}</excited>"
+            elif any(keyword in sentence.lower() for keyword in ['sad', 'unfortunately', 'sorry']):
+                # Sad statements
+                enhanced = f"<sad>{sentence}</sad>"
+            elif any(keyword in sentence.lower() for keyword in ['important', 'remember', 'key', 'crucial']):
+                # Important information
+                enhanced = f"<serious>{sentence}</serious>"
+            else:
+                # Regular statements - no special markers
+                enhanced = sentence
+                
+            enhanced_sentences.append(enhanced)
             
-            # Check if line starts with a number followed by a period (like "1.")
-            if re.match(r'^\d+\.', line.strip()):
-                # Remove the number prefix
-                line_to_add = re.sub(r'^\d+\.\s*', '', line.strip())
+        # Join enhanced sentences
+        enhanced_script = ' '.join(enhanced_sentences)
+        
+        # Add global emotion based on content
+        if '😂' in script or '🤣' in script or 'funny' in script.lower() or 'joke' in script.lower():
+            enhanced_script = f"<style=\"cheerful\">{enhanced_script}</style>"
+        elif '💡' in script or 'tip' in script.lower() or 'hack' in script.lower():
+            enhanced_script = f"<style=\"helpful\">{enhanced_script}</style>"
+        elif '🔥' in script or 'amazing' in script.lower() or 'awesome' in script.lower():
+            enhanced_script = f"<style=\"excited\">{enhanced_script}</style>"
             
-            for header in section_headers:
-                if line.strip().startswith(header):
-                    # Extract content after the header
-                    content = line[line.find(header) + len(header):].strip()
-                    if content:  # If there's content after the header, use it
-                        line_to_add = content
-                    else:  # If it's just a header line, skip it entirely
-                        skip_line = True
-                    break
-            
-            if not skip_line and line_to_add.strip():
-                clean_script_lines.append(line_to_add)
-        
-        clean_script = '\n'.join(clean_script_lines)
-        
-        # Print the cleaned script
-        print(colored(f"Cleaned script for TTS:\n{clean_script}", "blue"))
-        
-        # Check if the script is empty after cleaning
-        if not clean_script.strip():
-            print(colored("Warning: Script is empty after cleaning. Using original script.", "yellow"))
-            # Use the original script without section headers
-            clean_script = script
-            # Remove line numbers and section headers
-            clean_script = re.sub(r'^\d+\.\s*', '', clean_script)
-            for header in section_headers:
-                clean_script = clean_script.replace(header, '')
-            # Remove special patterns
-            for pattern in special_patterns:
-                clean_script = clean_script.replace(pattern, '')
-            clean_script = clean_script.strip()
-            print(colored(f"Fallback script for TTS:\n{clean_script}", "blue"))
-        
-        return clean_script
+        return enhanced_script
 
     async def _generate_subtitles(self, script: str, tts_path: str, channel_type: str) -> str:
         """Generate subtitles for the video"""
@@ -2092,7 +2044,7 @@ class VideoGenerator:
                 # Display final output info
                 file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
                 log_success(f"Video generated successfully in {processing_time:.1f}s")
-                log_result(f"Output: {final_output_path}")
+                log_info(f"Output: {final_output_path}")
                 log_info(f"File size: {file_size_mb:.1f} MB")
                 
                 # Get absolute path for easier access
