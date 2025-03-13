@@ -505,7 +505,25 @@ def get_background_music(content_type: str, duration: float = None) -> str:
     """Get background music based on content type"""
     try:
         # Use the new music provider to get music
-        music_path = asyncio.run(music_provider.get_music_for_channel(content_type, duration))
+        # Check if we're already in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an event loop, use create_task or run_coroutine_threadsafe
+            if loop.is_running():
+                # Use a synchronous approach instead
+                music_dir = f"assets/music/{content_type}"
+                if os.path.exists(music_dir):
+                    music_files = [f for f in os.listdir(music_dir) if f.endswith('.mp3')]
+                    if music_files:
+                        music_path = os.path.join(music_dir, random.choice(music_files))
+                        print(colored(f"✓ Using default music for {content_type}", "green"))
+                        return music_path
+            else:
+                # Loop exists but not running
+                music_path = loop.run_until_complete(music_provider.get_music_for_channel(content_type, duration))
+        except RuntimeError:
+            # No event loop, safe to use asyncio.run()
+            music_path = asyncio.run(music_provider.get_music_for_channel(content_type, duration))
         
         if music_path and os.path.exists(music_path):
             print(colored(f"✓ Using background music for {content_type}", "green"))
