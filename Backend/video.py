@@ -1308,7 +1308,27 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                     
                     # Calculate typing speed based on duration and text length
                     total_chars = len(multiline_text)
-                    chars_per_second = total_chars / duration
+                    
+                    # Improved typing speed calculation:
+                    # - For short durations, ensure all text appears with enough time to read
+                    # - For longer durations, create a more natural typing effect
+                    if duration < 2.0:
+                        # For very short subtitles, type faster to ensure all text appears
+                        chars_per_second = total_chars / (duration * 0.7)  # Use 70% of duration for typing
+                    elif duration < 4.0:
+                        # For medium length subtitles, use a balanced approach
+                        chars_per_second = total_chars / (duration * 0.8)  # Use 80% of duration for typing
+                    else:
+                        # For longer subtitles, use a more natural typing speed
+                        chars_per_second = total_chars / (duration * 0.9)  # Use 90% of duration for typing
+                    
+                    # Ensure minimum typing speed for readability
+                    min_chars_per_second = 15  # Minimum 15 characters per second
+                    chars_per_second = max(chars_per_second, min_chars_per_second)
+                    
+                    # Log the typing speed for debugging
+                    if i == 0 or i == len(subs) - 1:
+                        log_info(f"Subtitle {i+1} typing speed: {chars_per_second:.1f} chars/sec (duration: {duration:.2f}s, chars: {total_chars})")
                     
                     # Create a clip for each character to simulate typing
                     for j in range(1, total_chars + 1):

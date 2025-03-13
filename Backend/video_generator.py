@@ -356,9 +356,11 @@ class AudioManager:
             voice,
             emotion="neutral",
             speed=1.0):
-        """Generate TTS using Coqui TTS"""
+        """Generate TTS using Coqui TTS and save timing information for subtitle synchronization"""
         from video import log_info, log_success, log_error, log_step, log_progress, log_warning
         import random
+        from pydub import AudioSegment
+        import json
 
         try:
             # Initialize TTS model if not already done
@@ -428,6 +430,10 @@ class AudioManager:
 
             # Generate audio for each chunk
             chunk_audios = []
+            # Track timing information for subtitle synchronization
+            timing_info = []
+            current_time = 0.0
+
             for i, (sentence, sentence_emotion) in enumerate(tagged_sentences):
                 log_step(
                     i + 1,
@@ -464,6 +470,23 @@ class AudioManager:
                         speed=current_speed
                     )
                     log_success(f"Generated voice file: {chunk_path}")
+                    
+                    # Get the duration of this audio chunk for timing information
+                    audio_segment = AudioSegment.from_file(chunk_path)
+                    chunk_duration = len(audio_segment) / 1000.0  # Convert ms to seconds
+                    
+                    # Store timing information for subtitle synchronization
+                    timing_info.append({
+                        "sentence": sentence,
+                        "start_time": current_time,
+                        "end_time": current_time + chunk_duration,
+                        "duration": chunk_duration,
+                        "emotion": sentence_emotion
+                    })
+                    
+                    # Update current time for next chunk
+                    current_time += chunk_duration
+                    
                     chunk_audios.append(chunk_path)
 
                 except Exception as chunk_error:
@@ -480,6 +503,23 @@ class AudioManager:
                         )
                         log_success(
                             f"Generated voice file with fallback method: {chunk_path}")
+                        
+                        # Get the duration of this audio chunk for timing information
+                        audio_segment = AudioSegment.from_file(chunk_path)
+                        chunk_duration = len(audio_segment) / 1000.0  # Convert ms to seconds
+                        
+                        # Store timing information for subtitle synchronization
+                        timing_info.append({
+                            "sentence": sentence,
+                            "start_time": current_time,
+                            "end_time": current_time + chunk_duration,
+                            "duration": chunk_duration,
+                            "emotion": sentence_emotion
+                        })
+                        
+                        # Update current time for next chunk
+                        current_time += chunk_duration
+                        
                         chunk_audios.append(chunk_path)
                     except Exception as fallback_error:
                         log_error(
@@ -498,6 +538,12 @@ class AudioManager:
 
                 if combined_audio:
                     combined_audio.export(output_path, format="wav")
+                    
+                    # Save timing information to a JSON file for subtitle synchronization
+                    timing_file = output_path.replace(".wav", "_timing.json")
+                    with open(timing_file, 'w', encoding='utf-8') as f:
+                        json.dump(timing_info, f, indent=2)
+                    log_success(f"Saved TTS timing information for subtitle synchronization: {timing_file}")
 
                     # Clean up temporary files
                     for path in chunk_audios:
@@ -510,6 +556,12 @@ class AudioManager:
                     mp3_path = output_path.replace(".wav", ".mp3")
                     combined_audio.export(
                         mp3_path, format="mp3", bitrate="192k")
+                    
+                    # Also save timing information with MP3 path
+                    mp3_timing_file = mp3_path.replace(".mp3", "_timing.json")
+                    with open(mp3_timing_file, 'w', encoding='utf-8') as f:
+                        json.dump(timing_info, f, indent=2)
+                    
                     log_success(f"Generated voice file: {mp3_path}")
                 return mp3_path
 
@@ -2143,16 +2195,88 @@ class VideoGenerator:
             return 0
 
     async def _generate_delayed_subtitles(
-            self, script, audio_path, channel_type, delay=1.0):
-        """Generate subtitles with exactly 1 second delay for perfect voiceover synchronization"""
+            self, script, audio_path, channel_type, delay=0.0):
+        """Generate subtitles with synchronized timing using TTS timing data (no delay needed as audio is padded)"""
         try:
-            # Always use exactly 1.0 second delay for consistent synchronization
-            delay = 1.0
+            # Set delay to 0 since we're adding silence to the audio instead
+            delay = 0.0
             
             print(
                 colored(
-                    f"\n=== Generating Subtitles with Exactly 1.0s Delay for Perfect Sync ===",
+                    f"\n=== Generating Synchronized Subtitles (Audio Padded Instead) ===",
                     "blue"))
+            
+            # Check if we have timing information from TTS generation
+            timing_file = audio_path.replace(".mp3", "_timing.json")
+            if os.path.exists(timing_file):
+                print(colored(f"Found TTS timing information for precise subtitle synchronization", "green"))
+                
+                # Create output path for subtitles
+                delayed_subs_path = f"temp/subtitles/delayed_{uuid.uuid4()}.srt"
+                os.makedirs(os.path.dirname(delayed_subs_path), exist_ok=True)
+                
+                # Load timing information
+                with open(timing_file, 'r', encoding='utf-8') as f:
+                    timing_info = json.load(f)
+                
+                # Verify timing data
+                print(colored(f"Loaded {len(timing_info)} timing segments from TTS generation", "cyan"))
+                
+                # Get actual audio duration for verification
+                try:
+                    audio = AudioFileClip(audio_path)
+                    actual_audio_duration = audio.duration
+                    audio.close()
+                    
+                    # Get the last timing point from our data
+                    last_timing = timing_info[-1]["end_time"] if timing_info else 0
+                    
+                    print(colored(f"Audio file duration: {actual_audio_duration:.2f}s", "cyan"))
+                    print(colored(f"Last timing point: {last_timing:.2f}s", "cyan"))
+                    
+                    # Check if there's a significant discrepancy
+                    if abs(actual_audio_duration - last_timing) > 0.5:  # More than half a second difference
+                        print(colored(f"Warning: Timing data may not match actual audio (diff: {abs(actual_audio_duration - last_timing):.2f}s)", "yellow"))
+                        # Adjust timing proportionally if needed
+                        if last_timing > 0:
+                            scale_factor = actual_audio_duration / last_timing
+                            if abs(scale_factor - 1.0) > 0.1:  # More than 10% difference
+                                print(colored(f"Adjusting timing data by factor of {scale_factor:.2f}", "yellow"))
+                                for segment in timing_info:
+                                    segment["start_time"] *= scale_factor
+                                    segment["end_time"] *= scale_factor
+                                    segment["duration"] *= scale_factor
+                except Exception as e:
+                    print(colored(f"Could not verify audio duration: {str(e)}", "yellow"))
+                
+                # Create subtitles based on timing information
+                with open(delayed_subs_path, 'w', encoding='utf-8-sig') as f:
+                    for i, segment in enumerate(timing_info):
+                        # No need to add delay since audio is padded
+                        start_time = segment["start_time"]
+                        end_time = segment["end_time"]
+                        
+                        # Add a small buffer to ensure subtitles don't cut off too quickly
+                        end_time += 0.2  # Add 200ms buffer
+                        
+                        # Format times for SRT (HH:MM:SS,mmm)
+                        start_formatted = self._format_time(start_time)
+                        end_formatted = self._format_time(end_time)
+                        
+                        # Write subtitle entry
+                        f.write(f"{i+1}\n")
+                        f.write(f"{start_formatted} --> {end_formatted}\n")
+                        f.write(f"{segment['sentence'].strip()}\n\n")
+                        
+                        # Log the first and last subtitle for verification
+                        if i == 0 or i == len(timing_info) - 1:
+                            print(colored(f"Subtitle {i+1}: {start_time:.2f}s - {end_time:.2f}s: '{segment['sentence']}'", "cyan"))
+                
+                print(colored(f"✓ Generated {len(timing_info)} precisely synchronized subtitles using TTS timing data", "green"))
+                return delayed_subs_path
+            
+            # If no timing information is available, fall back to the original method
+            print(colored(f"No TTS timing information found, using standard subtitle generation", "yellow"))
 
             # First generate normal subtitles
             temp_subs_path = generate_subtitles(
@@ -2164,7 +2288,7 @@ class VideoGenerator:
             if not temp_subs_path:
                 raise ValueError("Failed to generate base subtitles")
 
-            # Now shift all subtitles by exactly 1 second for consistent delay
+            # Now create subtitles without delay since audio is padded
             delayed_subs_path = f"temp/subtitles/delayed_{uuid.uuid4()}.srt"
 
             # Read original subtitles
@@ -2180,32 +2304,40 @@ class VideoGenerator:
                 print(colored(f"Error getting audio duration: {str(e)}", "yellow"))
                 audio_duration = None
             
-            # Apply exactly 1 second delay to all subtitles
+            # No need to add delay since audio is padded
+            # Just add a small buffer to ensure subtitles don't cut off too quickly
             for sub in subs:
-                sub.start.seconds += 1.0
-                sub.end.seconds += 1.0
+                sub.end.seconds += 0.2  # Add 200ms buffer
             
             # Ensure the last subtitle doesn't extend beyond the audio
             if audio_duration and len(subs) > 0:
                 last_sub = subs[-1]
-                if last_sub.end.seconds > audio_duration + 1.0:
+                if last_sub.end.seconds > audio_duration:
                     print(colored(f"Trimming last subtitle to fit within audio duration", "yellow"))
-                    last_sub.end.seconds = audio_duration + 0.5  # End half a second before audio ends
+                    last_sub.end.seconds = audio_duration - 0.5  # End half a second before audio ends
+
+            # Log the first and last subtitle for verification
+            if len(subs) > 0:
+                first_sub = subs[0]
+                last_sub = subs[-1]
+                print(colored(f"First subtitle: {first_sub.start.seconds:.2f}s - {first_sub.end.seconds:.2f}s: '{first_sub.text}'", "cyan"))
+                print(colored(f"Last subtitle: {last_sub.start.seconds:.2f}s - {last_sub.end.seconds:.2f}s: '{last_sub.text}'", "cyan"))
 
             # Save shifted subtitles
             subs.save(delayed_subs_path, encoding='utf-8-sig')
 
             print(
                 colored(
-                    f"✓ Generated subtitles with exactly 1.0s delay for perfect voiceover sync",
+                    f"✓ Generated synchronized subtitles (audio padded instead of delaying subtitles)",
                     "green"))
             return delayed_subs_path
 
         except Exception as e:
             print(
                 colored(
-                    f"Delayed subtitles generation failed: {str(e)}",
+                    f"Error generating synchronized subtitles: {str(e)}",
                     "red"))
+            traceback.print_exc()
             return None
 
     async def _generate_video(
@@ -2235,6 +2367,31 @@ class VideoGenerator:
             total_duration = audio_duration + start_padding + end_padding
             print(colored(f"ℹ️ Audio duration: {audio_duration:.2f}s", "cyan"))
             print(colored(f"ℹ️ Video duration: {total_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)", "cyan"))
+
+            # Add 1-second silence at the beginning of the audio to match subtitle delay
+            print(colored("ℹ️ Adding 1-second silence at the beginning of audio to match subtitle delay", "cyan"))
+            temp_padded_audio_path = f"temp/padded_audio_{uuid.uuid4()}.mp3"
+            try:
+                from pydub import AudioSegment
+                
+                # Load the original audio
+                voice_audio = AudioSegment.from_file(tts_path)
+                
+                # Create 1 second of silence
+                one_second_silence = AudioSegment.silent(duration=1000)  # 1000ms = 1s
+                
+                # Add silence at the beginning
+                padded_audio = one_second_silence + voice_audio
+                
+                # Export the padded audio
+                padded_audio.export(temp_padded_audio_path, format="mp3")
+                
+                # Use the padded audio for the rest of the process
+                tts_path = temp_padded_audio_path
+                print(colored("✅ Successfully added 1-second silence to audio", "green"))
+            except Exception as e:
+                print(colored(f"⚠️ Error adding silence to audio: {str(e)}", "yellow"))
+                print(colored("⚠️ Using original audio without padding", "yellow"))
 
             # Generate video
             video_path = generate_video(
