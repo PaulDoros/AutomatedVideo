@@ -1214,8 +1214,8 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
         # Verify video dimensions
         log_info(f"Video dimensions: {video_width}x{video_height}")
         
-        # Calculate the vertical position for subtitles (bottom of the screen)
-        vertical_position = 0.8  # Near bottom of the screen
+        # Calculate the vertical position for subtitles (middle of the screen)
+        vertical_position = 0.5  # Middle of the screen
         
         # Apply start padding to all subtitles if specified
         if start_padding > 0:
@@ -1230,9 +1230,10 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
             last_end_time = last_sub.end.ordinal / 1000.0  # Convert to seconds
             video_duration = base_video.duration
             
-            if last_end_time < video_duration - 3.0:  # If it ends more than 3 seconds before video end
+            # Make the last subtitle stay until the end of the video
+            if last_end_time < video_duration - 0.5:
                 log_info(f"Extending last subtitle to match video duration")
-                last_sub.end.seconds = video_duration - 1.0  # End 1 second before video end
+                last_sub.end.seconds = video_duration - 0.5  # End 0.5 second before video end
         
         # Process each subtitle
         for i, sub in enumerate(subs):
@@ -1255,7 +1256,7 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                     log_warning(f"Skipping subtitle {i+1} with invalid duration: {duration}s")
                     continue
                     
-                # Clean the text
+                # Clean the text but preserve emojis
                 text = html.unescape(sub.text)
                 text = re.sub(r'<[^>]+>', '', text)  # Remove HTML tags
                 text = re.sub(r"\.'\]$", "", text)   # Remove trailing .']
@@ -1355,6 +1356,10 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                         else:
                             # Last character stays until the end of the subtitle
                             char_duration = end_time - char_time
+                            
+                            # For the last subtitle, make the last character stay until the end of the video
+                            if i == len(subs) - 1:
+                                char_duration = base_video.duration - char_time
                         
                         # Set timing and position
                         txt_clip = txt_clip.set_start(char_time).set_duration(char_duration)
@@ -1388,6 +1393,10 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                         # Set timing and position
                         txt_clip = txt_clip.set_start(start_time).set_duration(duration)
                         txt_clip = txt_clip.set_position(('center', vertical_position), relative=True)
+                        
+                        # For the last subtitle, make it stay until the end of the video
+                        if i == len(subs) - 1:
+                            txt_clip = txt_clip.set_duration(base_video.duration - start_time)
                         
                         # Add fade effects
                         fade_duration = min(0.2, duration / 5)

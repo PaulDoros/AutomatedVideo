@@ -1,18 +1,5 @@
 [
   {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\uddd1\u200d\ud83d\udcbb  \n(If you don\u2019t get it, you might need to debug your humor function.) \ud83d\udc1b  \nFollow for more tech humor!",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "36/100 max",
-      "estimated_duration": "17.3s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741850309.8586333
-  },
-  {
     "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s true in base 8, trust me.)  \n\nFollow for more tech humor! \ud83d\ude80",
     "metrics": {
       "lines": "4/10 max",
@@ -258,5 +245,18 @@
       "has_value_prop": false
     },
     "timestamp": 1741856209.5596097
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s a base-8 joke, don\u2019t @ me.)  \n\nFollow for more tech humor!",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "29/100 max",
+      "estimated_duration": "13.9s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741881407.8315172
   }
 ]

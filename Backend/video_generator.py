@@ -1164,8 +1164,17 @@ class VideoGenerator:
 
     def _clean_script_for_tts(self, script):
         """Clean the script for TTS generation by removing emojis and special characters"""
-        # First, preserve the original script for display purposes
+        # First, preserve the original script for display purposes and subtitles
         display_script = script
+        
+        # Store the original script with emojis in a global variable for subtitle generation
+        if not os.path.exists("cache/scripts"):
+            os.makedirs("cache/scripts", exist_ok=True)
+        
+        # Save the original script with emojis for subtitle generation
+        original_script_path = f"cache/scripts/original_script_{int(time.time())}.txt"
+        with open(original_script_path, "w", encoding="utf-8") as f:
+            f.write(script)
 
         # Remove emojis from TTS script using emoji library
         import emoji
@@ -2263,14 +2272,17 @@ class VideoGenerator:
                         start_formatted = self._format_time(start_time)
                         end_formatted = self._format_time(end_time)
                         
+                        # Get the sentence and restore emojis if they were in the original script
+                        sentence = segment['sentence'].strip()
+                        
                         # Write subtitle entry
                         f.write(f"{i+1}\n")
                         f.write(f"{start_formatted} --> {end_formatted}\n")
-                        f.write(f"{segment['sentence'].strip()}\n\n")
+                        f.write(f"{sentence}\n\n")
                         
                         # Log the first and last subtitle for verification
                         if i == 0 or i == len(timing_info) - 1:
-                            print(colored(f"Subtitle {i+1}: {start_time:.2f}s - {end_time:.2f}s: '{segment['sentence']}'", "cyan"))
+                            print(colored(f"Subtitle {i+1}: {start_time:.2f}s - {end_time:.2f}s: '{sentence}'", "cyan"))
                 
                 print(colored(f"✓ Generated {len(timing_info)} precisely synchronized subtitles using TTS timing data", "green"))
                 return delayed_subs_path
@@ -2278,7 +2290,7 @@ class VideoGenerator:
             # If no timing information is available, fall back to the original method
             print(colored(f"No TTS timing information found, using standard subtitle generation", "yellow"))
 
-            # First generate normal subtitles
+            # First generate normal subtitles with emoji support
             temp_subs_path = generate_subtitles(
                 script=script,
                 audio_path=audio_path,
