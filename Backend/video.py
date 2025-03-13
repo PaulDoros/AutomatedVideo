@@ -30,7 +30,8 @@ import time
 import shutil
 import subprocess
 import asyncio
-from music_provider import MusicProvider
+
+from music_provider import MusicProvider, music_provider
 import concurrent.futures
 
 # First activate your virtual environment and install pysrt:
@@ -1139,57 +1140,64 @@ def enhance_tts_prompt(script, content_type):
     return base_prompt
 
 def process_subtitles(subs_path, base_video, start_padding=0.0):
-    """Process subtitles and create clips to overlay on video with clear, readable text without background"""
-    from video import log_info, log_success, log_warning, log_error
-    import pysrt
-    from PIL import Image, ImageDraw, ImageFont
-    import numpy as np
-    import re
-    
+    """Process subtitles and create clips to overlay on video with typing effect that syncs with voiceover"""
     try:
-        if not subs_path or not os.path.exists(subs_path):
-            log_warning("No subtitles file provided or file doesn't exist")
+        from video import log_info, log_success, log_warning, log_error
+        
+        # Check if subtitles file exists
+        if not os.path.exists(subs_path):
+            log_warning(f"Subtitles file not found: {subs_path}")
             return base_video
             
-        # Parse the srt file
+        # Load subtitles
         try:
             subs = pysrt.open(subs_path)
-            if not subs or len(subs) == 0:
-                log_warning("No subtitles found in file")
-                return base_video
-                
             log_info(f"Processing {len(subs)} subtitles")
         except Exception as e:
-            log_error(f"Error parsing subtitles file: {str(e)}")
+            log_warning(f"Error loading subtitles: {str(e)}")
             return base_video
+            
+        # Get video dimensions
+        video_width, video_height = base_video.size
         
-        # Load font
+        # Define font sizes based on video dimensions
+        large_font_size = 120
+        medium_font_size = 100
+        small_font_size = 80
+        
+        # Load fonts
         try:
+            # Use a more readable font with better contrast
             font_path = "assets/fonts/Montserrat-Bold.ttf"
             if not os.path.exists(font_path):
-                font_path = "C:/Windows/Fonts/Arial.ttf"  # Fallback for Windows
-            
-            # Create different font sizes for different text lengths
-            large_font = ImageFont.truetype(font_path, 140)  # For short text - increased size
-            medium_font = ImageFont.truetype(font_path, 120)  # For medium text - increased size
-            small_font = ImageFont.truetype(font_path, 100)   # For long text - increased size
-        except Exception as font_error:
-            log_warning(f"Error loading fonts: {str(font_error)}")
-            # Use default fonts as fallback
-            large_font = ImageFont.load_default()
-            medium_font = ImageFont.load_default()
-            small_font = ImageFont.load_default()
+                font_path = "assets/fonts/Arial.ttf"
+                if not os.path.exists(font_path):
+                    # Fallback to default
+                    large_font = None
+                    medium_font = None
+                    small_font = None
+                else:
+                    large_font = font_path
+                    medium_font = font_path
+                    small_font = font_path
+            else:
+                large_font = font_path
+                medium_font = font_path
+                small_font = font_path
+        except Exception as e:
+            log_warning(f"Error loading fonts: {str(e)}")
+            large_font = None
+            medium_font = None
+            small_font = None
             
         # Create subtitle clips
         subtitle_clips = []
-        video_width = base_video.w
-        video_height = base_video.h
         
         # Verify video dimensions
         log_info(f"Video dimensions: {video_width}x{video_height}")
         
-        # Calculate the vertical position for subtitles (center of the screen)
-        vertical_position = 0.5  # Center of the screen
+        # Calculate the vertical position for subtitles (bottom of the screen)
+        vertical_position = 0.8  # Near bottom of the screen
         
         # Apply start padding to all subtitles if specified
         if start_padding > 0:
@@ -1220,6 +1228,10 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 end_time = sub.end.ordinal / 1000.0
                 duration = end_time - start_time
                 
+                # Add a small buffer to ensure subtitles don't cut off too quickly
+                duration += 0.2  # Add 200ms buffer
+                end_time += 0.2
+                
                 # Skip if duration is invalid or too short
                 if duration <= 0.1:  # Minimum duration of 0.1 seconds
                     log_warning(f"Skipping subtitle {i+1} with invalid duration: {duration}s")
@@ -1237,109 +1249,117 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 # Choose font size based on text length
                 if len(text) < 20:
                     font = large_font
+                    font_size = large_font_size
                 elif len(text) < 40:
                     font = medium_font
+                    font_size = medium_font_size
                 else:
                     font = small_font
+                    font_size = small_font_size
                 
-                # Create subtitle image
+                # Create text clip with typing effect
                 try:
-                    # Create image for subtitle - use full width and 1/3 of height
-                    img_height = int(video_height / 3)  # Use 1/3 of the video height for subtitle area
-                    img = Image.new('RGBA', (video_width, img_height), (0, 0, 0, 0))
-                    draw = ImageDraw.Draw(img)
+                    # Calculate text width to determine if we need to split into multiple lines
+                    max_width = video_width * 0.85  # Use 85% of video width
                     
-                    # Calculate text size and position
-                    text_bbox = draw.textbbox((0, 0), text, font=font)
-                    text_width = text_bbox[2] - text_bbox[0]
-                    text_height = text_bbox[3] - text_bbox[1]
+                    # Split text into multiple lines if it's too long
+                    words = text.split()
+                    lines = []
+                    current_line = ""
                     
-                    # If text is too wide, split it into multiple lines
-                    if text_width > video_width - 100:  # Leave 50px padding on each side
-                        words = text.split()
-                        lines = []
-                        current_line = []
+                    for word in words:
+                        test_line = current_line + " " + word if current_line else word
+                        # Estimate text width (this is approximate)
+                        estimated_width = len(test_line) * (font_size * 0.6)  # Rough estimate
                         
-                        for word in words:
-                            test_line = ' '.join(current_line + [word])
-                            test_bbox = draw.textbbox((0, 0), test_line, font=font)
-                            test_width = test_bbox[2] - test_bbox[0]
-                            
-                            if test_width <= video_width - 100 or not current_line:
-                                current_line.append(word)
-                            else:
-                                lines.append(' '.join(current_line))
-                                current_line = [word]
-                        
-                        if current_line:
-                            lines.append(' '.join(current_line))
-                        
-                        # Recalculate image height based on number of lines
-                        line_height = text_height + 20  # Add 20px spacing between lines
-                        total_text_height = line_height * len(lines)
-                        
-                        # Create new image with appropriate height
-                        img = Image.new('RGBA', (video_width, total_text_height + 100), (0, 0, 0, 0))
-                        draw = ImageDraw.Draw(img)
-                        
-                        # Draw each line of text
-                        y_offset = 50  # Start 50px from top of image
-                        for line in lines:
-                            line_bbox = draw.textbbox((0, 0), line, font=font)
-                            line_width = line_bbox[2] - line_bbox[0]
-                            x = (video_width - line_width) // 2
-                            
-                            # Draw text outline/stroke for better visibility
-                            outline_size = 6  # Increased outline size
-                            for offset_x in range(-outline_size, outline_size + 1, 2):
-                                for offset_y in range(-outline_size, outline_size + 1, 2):
-                                    draw.text((x + offset_x, y_offset + offset_y), line, font=font, fill=(0, 0, 0, 255))
-                            
-                            # Draw main text
-                            draw.text((x, y_offset), line, font=font, fill=(255, 255, 255, 255))
-                            
-                            y_offset += line_height
-                    else:
-                        # Center the text
-                        x = (video_width - text_width) // 2
-                        y = (img_height - text_height) // 2
-                        
-                        # Draw text outline/stroke for better visibility
-                        outline_size = 6  # Increased outline size
-                        for offset_x in range(-outline_size, outline_size + 1, 2):
-                            for offset_y in range(-outline_size, outline_size + 1, 2):
-                                draw.text((x + offset_x, y + offset_y), text, font=font, fill=(0, 0, 0, 255))
-                        
-                        # Draw main text
-                        draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+                        if estimated_width <= max_width:
+                            current_line = test_line
+                        else:
+                            if current_line:
+                                lines.append(current_line)
+                            current_line = word
                     
-                    # Convert PIL image to numpy array
-                    img_array = np.array(img)
+                    if current_line:
+                        lines.append(current_line)
                     
-                    # Create clip from image
-                    txt_clip = ImageClip(img_array)
+                    # Join lines with newlines
+                    multiline_text = "\n".join(lines)
                     
-                    # Set exact timing from SRT file for perfect synchronization
-                    txt_clip = txt_clip.set_duration(duration)
-                    txt_clip = txt_clip.set_start(start_time)
+                    # Create a list of clips for the typing effect
+                    typing_clips = []
                     
-                    # Position at the center of the screen
-                    txt_clip = txt_clip.set_position(('center', vertical_position), relative=True)
+                    # Calculate typing speed based on duration and text length
+                    total_chars = len(multiline_text)
+                    chars_per_second = total_chars / duration
                     
-                    # Add fade effects - shorter fades for better synchronization
-                    fade_duration = min(0.3, duration / 4)  # Use shorter fades for short subtitles
-                    txt_clip = txt_clip.crossfadein(fade_duration).crossfadeout(fade_duration)
+                    # Create a clip for each character to simulate typing
+                    for j in range(1, total_chars + 1):
+                        partial_text = multiline_text[:j]
+                        
+                        # Create text clip for this partial text
+                        txt_clip = TextClip(
+                            partial_text,
+                            fontsize=font_size,
+                            font=font,
+                            color='white',
+                            align='center',
+                            method='caption',
+                            size=(int(video_width * 0.9), None)
+                        )
+                        
+                        # Calculate when this character should appear
+                        char_time = start_time + (j / chars_per_second)
+                        
+                        # Set duration for this character's clip (until the next character appears)
+                        if j < total_chars:
+                            next_char_time = start_time + ((j + 1) / chars_per_second)
+                            char_duration = next_char_time - char_time
+                        else:
+                            # Last character stays until the end of the subtitle
+                            char_duration = end_time - char_time
+                        
+                        # Set timing and position
+                        txt_clip = txt_clip.set_start(char_time).set_duration(char_duration)
+                        txt_clip = txt_clip.set_position(('center', vertical_position), relative=True)
+                        
+                        typing_clips.append(txt_clip)
                     
-                    subtitle_clips.append(txt_clip)
+                    # Add all typing clips to the subtitle clips list
+                    subtitle_clips.extend(typing_clips)
                     
                     # Log progress
                     if i == 0 or i == len(subs) - 1 or i % max(5, len(subs) // 5) == 0:
-                        log_info(f"Created subtitle {i+1}/{len(subs)} (Time: {start_time:.2f}s - {end_time:.2f}s)")
+                        log_info(f"Created subtitle {i+1}/{len(subs)} with typing effect (Time: {start_time:.2f}s - {end_time:.2f}s)")
                 
                 except Exception as img_error:
                     log_warning(f"Error creating subtitle image for subtitle {i+1}: {str(img_error)}")
                     traceback.print_exc()
-                    continue
+                    
+                    # Fallback to simple text without typing effect
+                    try:
+                        txt_clip = TextClip(
+                            multiline_text,
+                            fontsize=font_size,
+                            font=font,
+                            color='white',
+                            align='center',
+                            method='caption',
+                            size=(int(video_width * 0.9), None)
+                        )
+                        
+                        # Set timing and position
+                        txt_clip = txt_clip.set_start(start_time).set_duration(duration)
+                        txt_clip = txt_clip.set_position(('center', vertical_position), relative=True)
+                        
+                        # Add fade effects
+                        fade_duration = min(0.2, duration / 5)
+                        txt_clip = txt_clip.crossfadein(fade_duration).crossfadeout(fade_duration)
+                        
+                        subtitle_clips.append(txt_clip)
+                        log_warning(f"Using fallback simple text for subtitle {i+1}")
+                    except Exception as fallback_error:
+                        log_warning(f"Fallback also failed for subtitle {i+1}: {str(fallback_error)}")
+                        continue
                     
             except Exception as e:
                 log_warning(f"Error processing subtitle {i+1}: {str(e)}")
@@ -1350,17 +1370,15 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
         if not subtitle_clips:
             log_warning("No valid subtitle clips were created")
             return base_video
-        
-        # Combine all subtitle clips with the base video
-        try:
-            log_success(f"Adding {len(subtitle_clips)} subtitles to video")
-            result = CompositeVideoClip([base_video] + subtitle_clips)
-            return result
-        except Exception as compose_error:
-            log_error(f"Error compositing subtitles with video: {str(compose_error)}")
-            traceback.print_exc()
-            return base_video
             
+        # Add all subtitle clips to the video
+        log_info(f"Adding {len(subtitle_clips)} subtitle clips with typing effect to video")
+        
+        # Create final video with subtitles
+        final_video = CompositeVideoClip([base_video] + subtitle_clips)
+        
+        return final_video
+        
     except Exception as e:
         log_error(f"Error processing subtitles: {str(e)}")
         traceback.print_exc()
@@ -1368,208 +1386,124 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
 
 def generate_video(background_path, audio_path, subtitles_path=None, content_type=None, target_duration=None, 
                   use_background_music=True, music_volume=0.3, music_fade_in=2.0, music_fade_out=3.0, script_path=None):
-    """Generate a video with audio and subtitles"""
+    """Generate a video with audio and subtitles with 1s start padding and 2s end padding"""
     try:
-        log_section("Video Generation", "🎬")
-        
-        # Load audio to get duration
-        audio = AudioFileClip(audio_path)
-        audio_duration = audio.duration
-        log_info(f"Audio duration: {audio_duration:.2f}s")
-        
-        # Calculate video duration with padding
-        # Note: If using delayed audio (with 1s silence at start), we don't need additional start padding
-        # Check if the audio filename contains 'delayed' which indicates it already has the start padding
-        if '_delayed.' in audio_path:
-            start_padding = 0.0  # No additional start padding needed
-            log_info("Using audio with built-in delay, no additional start padding needed")
-        else:
-            start_padding = 1.0  # 1 second at start
-            
-        end_padding = 3.0    # 3 seconds at end (increased from 2 to 3 seconds)
-        video_duration = audio_duration + start_padding + end_padding
-        log_info(f"Video duration: {video_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)")
-        
-        # Use target_duration if provided, otherwise use calculated duration
-        if target_duration:
-            log_info(f"Using provided target duration: {target_duration:.2f}s")
-            # IMPORTANT: Slightly reduce the target duration to prevent black fade at end
-            # Using a smaller adjustment to minimize the gap at the end
-            video_duration = target_duration - 0.05
-            log_info(f"Adjusted to {video_duration:.2f}s to prevent black end frame")
+        from video import log_info, log_success, log_warning, log_error, log_step
         
         # Handle different background path formats
-        if isinstance(background_path, list) and len(background_path) > 0:
-            # Check if we have multiple videos to combine
+        if isinstance(background_path, list):
+            # If we have a list of background videos, use combine_videos function
             if len(background_path) > 1:
                 log_info(f"Combining {len(background_path)} videos for a dynamic background")
                 try:
+                    # Load audio to get duration
+                    audio = AudioFileClip(audio_path)
+                    audio_duration = audio.duration
+                    audio.close()
+                    
+                    # Define padding
+                    start_padding = 1.0  # 1 second at the start
+                    end_padding = 2.0    # 2 seconds at the end
+                    
+                    # Calculate total video duration with padding
+                    total_duration = audio_duration + start_padding + end_padding
+                    
                     # Use the combine_videos function to create a dynamic background
-                    combined_video_path = combine_videos(background_path, audio_duration, video_duration)
+                    combined_video_path = combine_videos(background_path, audio_duration, total_duration)
                     if combined_video_path and os.path.exists(combined_video_path):
-                        background_video = VideoFileClip(combined_video_path, fps_source="fps")
+                        background_path = combined_video_path
                         log_success("Successfully combined multiple videos for a dynamic background")
                     else:
                         # Fallback to using the first video if combination fails
                         log_warning("Video combination failed, using first video as fallback")
-                        background_video_path = background_path[0]
-                        if isinstance(background_video_path, dict):
-                            background_video_path = background_video_path.get('path')
-                        background_video = VideoFileClip(background_video_path, fps_source="fps")
+                        background_path = background_path[0]
+                        if isinstance(background_path, dict):
+                            background_path = background_path.get('path')
                 except Exception as e:
                     log_error(f"Error in video combination: {str(e)}")
                     # Fallback to using the first video
                     log_warning("Using first video as fallback due to combination error")
-                    background_video_path = background_path[0]
-                    if isinstance(background_video_path, dict):
-                        background_video_path = background_video_path.get('path')
-                    background_video = VideoFileClip(background_video_path, fps_source="fps")
+                    background_path = background_path[0]
+                    if isinstance(background_path, dict):
+                        background_path = background_path.get('path')
             else:
                 # Just one video in the list
                 log_info(f"Using single video from list")
-                background_video_path = background_path[0]
-                if isinstance(background_video_path, dict):
-                    background_video_path = background_video_path.get('path')
-                
-                # Verify the file exists and is readable
-                if not os.path.exists(background_video_path) or os.path.getsize(background_video_path) == 0:
-                    log_error(f"Background video file does not exist or is empty: {background_video_path}")
-                    # Create a default background
-                    log_warning("Creating default background")
-                    background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
-                else:
-                    try:
-                        background_video = VideoFileClip(background_video_path, fps_source="fps")
-                    except Exception as e:
-                        log_error(f"Error loading background video: {str(e)}")
-                        # Create a default background
-                        log_warning("Creating default background")
-                        background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
-        else:
-            # Single background video or no background
-            if background_path and os.path.exists(background_path):
-                log_info(f"Using single background video: {background_path}")
-                try:
-                    background_video = VideoFileClip(background_path, fps_source="fps")
-                except Exception as e:
-                    log_error(f"Error loading background video: {str(e)}")
-                    # Create a default background
-                    log_warning("Creating default background")
-                    background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
-            else:
-                # Create a default background
-                log_warning("No valid background video provided, creating default")
-                background_video = ColorClip(size=(1080, 1920), color=(25, 45, 65), duration=video_duration)
+                background_path = background_path[0]
+                if isinstance(background_path, dict):
+                    background_path = background_path.get('path')
         
-        # Process the background video
+        # Check if files exist
+        if not os.path.exists(background_path):
+            log_error(f"Background video not found: {background_path}")
+            return None
+            
+        if not os.path.exists(audio_path):
+            log_error(f"Audio file not found: {audio_path}")
+            return None
+            
+        # Load background video
+        background_video = VideoFileClip(background_path)
+        
+        # Load audio
+        audio = AudioFileClip(audio_path)
+        
+        # Get audio duration
+        audio_duration = audio.duration
+        
+        # Define padding
+        start_padding = 1.0  # 1 second at the start
+        end_padding = 2.0    # 2 seconds at the end
+        
+        # Calculate total video duration with padding
+        total_duration = audio_duration + start_padding + end_padding
+        log_info(f"Audio duration: {audio_duration:.2f}s")
+        log_info(f"Video duration: {total_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)")
+        
+        # If target duration is provided, use it
+        if target_duration:
+            log_info(f"Using provided target duration: {target_duration}s")
+            # Ensure target duration is not shorter than audio duration + padding
+            if target_duration < total_duration:
+                log_warning(f"Target duration {target_duration}s is shorter than audio duration + padding {total_duration}s")
+                log_info(f"Adjusting target duration to {total_duration}s")
+                target_duration = total_duration
+        else:
+            target_duration = total_duration
+            
+        # Adjust duration slightly to prevent black end frame
+        target_duration -= 0.05
+        log_info(f"Adjusted to {target_duration:.2f}s to prevent black end frame")
+        
+        # Resize and trim background video
         try:
-            # Resize and crop to vertical format
+            # Resize to vertical format
             log_processing("Resizing video to vertical format")
             background_video = resize_to_vertical(background_video)
             
-            # Loop if needed to match audio duration
-            if background_video.duration < video_duration:
-                log_processing(f"Looping background video ({background_video.duration:.2f}s) to match audio ({video_duration:.2f}s)")
-                background_video = vfx.loop(background_video, duration=video_duration)
+            # Trim or loop background video to match target duration
+            log_processing(f"Trimming background video from {background_video.duration:.2f}s to {target_duration:.2f}s")
             
-            # Trim if longer than needed
-            if background_video.duration > video_duration:
-                log_processing(f"Trimming background video from {background_video.duration:.2f}s to {video_duration:.2f}s")
-                background_video = background_video.subclip(0, video_duration)
+            if background_video.duration < target_duration:
+                # Loop the video if it's too short
+                n_loops = math.ceil(target_duration / background_video.duration)
+                clips = [background_video] * n_loops
+                background_video = concatenate_videoclips(clips)
+                
+            # Trim to exact duration
+            background_video = background_video.subclip(0, target_duration)
             
             # Add audio to video with delay
             log_processing("Adding audio to video with delay")
             
-            # Add background music if enabled
-            if use_background_music:
+            # If background music is enabled, mix it with the audio
+            if use_background_music and content_type:
                 try:
-                    log_processing("Adding audio to video with delay")
-                    
-                    # Initialize music provider
-                    from music_provider import MusicProvider
-                    music_provider = MusicProvider()
-                    if music_provider.initialize_freesound_client():
-                        log_success("Freesound API client initialized")
-                    
-                    # Load used music to avoid repetition
-                    music_provider.load_used_music()
-                    
-                    # Get background music for the content type
-                    log_info(f"Getting background music for {content_type}...")
-                    
-                    # Get music path - first try to extract keywords from script if available
-                    music_path = None
-                    video_keywords = []
-                    
-                    if script_path and os.path.exists(script_path):
-                        try:
-                            # Read the script file
-                            with open(script_path, 'r', encoding='utf-8') as f:
-                                script_text = f.read()
-                            
-                            # Extract keywords from script
-                            import re
-                            from collections import Counter
-                            import nltk
-                            from nltk.corpus import stopwords
-                            
-                            try:
-                                nltk.data.find('corpora/stopwords')
-                            except LookupError:
-                                nltk.download('stopwords')
-                            
-                            # Clean the script text
-                            script_text = re.sub(r'[^\w\s]', '', script_text.lower())
-                            
-                            # Tokenize and count words
-                            words = script_text.split()
-                            stop_words = set(stopwords.words('english'))
-                            filtered_words = [word for word in words if word not in stop_words and len(word) > 3]
-                            
-                            # Count word frequency
-                            word_count = Counter(filtered_words)
-                            
-                            # Get the most frequent words as keywords
-                            sorted_words = sorted(word_count.items(), key=lambda x: x[1], reverse=True)
-                            video_keywords = [word for word, count in sorted_words[:5]]
-                            log_info(f"Extracted keywords from script: {', '.join(video_keywords)}")
-                        except Exception as e:
-                            log_warning(f"Error extracting keywords from script: {str(e)}")
-                    
-                    # Handle async call properly based on context
-                    try:
-                        # Try to get the current event loop
-                        loop = asyncio.get_event_loop()
-                        
-                        # Create a synchronous version of the async function
-                        def get_music_sync():
-                            # Use a new event loop in a separate thread to avoid conflicts
-                            new_loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(new_loop)
-                            try:
-                                # Use the new download_music_for_video function if keywords are available
-                                if video_keywords:
-                                    return new_loop.run_until_complete(
-                                        music_provider.download_music_for_video(content_type, video_keywords, video_duration)
-                                    )
-                                else:
-                                    return new_loop.run_until_complete(
-                                        music_provider.get_music_for_channel(content_type, video_duration)
-                                    )
-                            finally:
-                                new_loop.close()
-                        
-                        # Run the synchronous function in a thread executor
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            music_path = executor.submit(get_music_sync).result(timeout=30)
-                            
-                    except Exception as e:
-                        log_warning(f"Error in async music retrieval: {str(e)}")
-                        # Fallback to a default music file
-                        music_path = music_provider.get_default_music(content_type)
+                    # Get background music
+                    music_path = get_background_music(content_type, audio_duration)
                     
                     if music_path and os.path.exists(music_path):
-                        # Get file size and name for logging
+                        # Get file size in MB
                         file_size = os.path.getsize(music_path) / (1024 * 1024)  # MB
                         file_name = os.path.basename(music_path)
                         
@@ -1585,45 +1519,64 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
                         delayed_audio = audio.set_start(start_padding)
                         delayed_audio.write_audiofile(delayed_audio_path)
                         
-                        # Mix the audio using our enhanced mix_audio function
-                        mixed_audio_path = mix_audio(
-                            voice_path=delayed_audio_path,
-                            music_path=music_path,
-                            output_path=mixed_audio_path,
-                            music_volume=music_volume,
-                            fade_in=music_fade_in,
-                            fade_out=music_fade_out
-                        )
-                        
-                        if mixed_audio_path and os.path.exists(mixed_audio_path):
-                            try:
-                                # Load the mixed audio
-                                final_audio = AudioFileClip(mixed_audio_path)
-                                
-                                # Set audio to video
-                                video = background_video.set_audio(final_audio)
-                                log_success("Added background music to video using enhanced mixing")
-                                log_info(f"Music: {os.path.basename(music_path)} | Volume: {music_volume}")
-                            except Exception as audio_error:
-                                log_warning(f"Error setting mixed audio to video: {str(audio_error)}")
-                                # Fallback to direct audio setting without using CompositeAudioClip
-                                log_info("Using fallback method for audio mixing")
+                        # Check if we already have a mixed version (to avoid duplicate mixing)
+                        mixed_flag_file = delayed_audio_path + ".mixed"
+                        if os.path.exists(mixed_flag_file):
+                            log_info("Using pre-mixed audio (already processed)")
+                            # Just use the existing mixed audio
+                            if os.path.exists(mixed_audio_path):
+                                try:
+                                    final_audio = AudioFileClip(mixed_audio_path)
+                                    video = background_video.set_audio(final_audio)
+                                except Exception as e:
+                                    log_warning(f"Error loading pre-mixed audio: {str(e)}")
+                                    # Fallback to original audio
+                                    delayed_audio = audio.set_start(start_padding)
+                                    video = background_video.set_audio(delayed_audio)
+                            else:
+                                # If mixed file doesn't exist, use original
                                 delayed_audio = audio.set_start(start_padding)
                                 video = background_video.set_audio(delayed_audio)
                         else:
-                            # No music found, just use voice audio
-                            log_warning(f"Failed to mix audio, using voice audio only")
-                            delayed_audio = audio.set_start(start_padding)
-                            video = background_video.set_audio(delayed_audio)
+                            # Mix the audio using our enhanced mix_audio function
+                            mixed_audio_path = mix_audio(
+                                voice_path=delayed_audio_path,
+                                music_path=music_path,
+                                output_path=mixed_audio_path,
+                                music_volume=music_volume,
+                                fade_in=music_fade_in,
+                                fade_out=music_fade_out
+                            )
                             
-                        # Clean up temporary files
-                        try:
-                            if os.path.exists(delayed_audio_path):
-                                os.remove(delayed_audio_path)
                             if mixed_audio_path and os.path.exists(mixed_audio_path):
-                                os.remove(mixed_audio_path)
-                        except Exception as e:
-                            log_warning(f"Error cleaning up temporary audio files: {str(e)}")
+                                try:
+                                    # Load the mixed audio
+                                    final_audio = AudioFileClip(mixed_audio_path)
+                                    
+                                    # Set audio to video
+                                    video = background_video.set_audio(final_audio)
+                                    log_success("Added background music to video using enhanced mixing")
+                                    log_info(f"Music: {os.path.basename(music_path)} | Volume: {music_volume}")
+                                except Exception as audio_error:
+                                    log_warning(f"Error setting mixed audio to video: {str(audio_error)}")
+                                    # Fallback to direct audio setting without using CompositeAudioClip
+                                    log_info("Using fallback method for audio mixing")
+                                    delayed_audio = audio.set_start(start_padding)
+                                    video = background_video.set_audio(delayed_audio)
+                            else:
+                                # No music found, just use voice audio
+                                log_warning(f"Failed to mix audio, using voice audio only")
+                                delayed_audio = audio.set_start(start_padding)
+                                video = background_video.set_audio(delayed_audio)
+                                
+                            # Clean up temporary files
+                            try:
+                                if os.path.exists(delayed_audio_path):
+                                    os.remove(delayed_audio_path)
+                                if mixed_audio_path and os.path.exists(mixed_audio_path):
+                                    os.remove(mixed_audio_path)
+                            except Exception as e:
+                                log_warning(f"Error cleaning up temporary audio files: {str(e)}")
                     else:
                         # No music found, just use voice audio
                         log_warning(f"No background music found for {content_type}, using voice audio only")
@@ -1636,6 +1589,7 @@ def generate_video(background_path, audio_path, subtitles_path=None, content_typ
                     video = background_video.set_audio(delayed_audio)
             else:
                 # Background music disabled, just use voice audio
+                log_info("Background music disabled, using voice audio only")
                 delayed_audio = audio.set_start(start_padding)
                 video = background_video.set_audio(delayed_audio)
             
@@ -1839,11 +1793,6 @@ def generate_video_thumbnail(script, content_type):
         # Clean script text to remove problematic characters
         clean_script = re.sub(r'[\\/:*?"<>|]', '', script)  # Remove characters not allowed in filenames
         
-        # Save script to a temporary file instead of using it directly
-        temp_script_path = f"temp/thumbnails/script_{timestamp}.txt"
-        with open(temp_script_path, "w", encoding="utf-8") as f:
-            f.write(clean_script)
-        
         # Extract main text from script (first line usually)
         lines = clean_script.strip().split('\n')
         main_text = lines[0].replace('"', '').strip()
@@ -1919,7 +1868,7 @@ def generate_video_thumbnail(script, content_type):
         
         # Apply gradient
         if 'gradient' in template['effects']:
-            gradient = generator.create_gradient(template['gradient'])
+            gradient = generator.create_gradient(template['gradient'], size=(1080, 1920))
             img = Image.blend(img, gradient, 0.8)
             
         # Apply overlay
@@ -1932,25 +1881,43 @@ def generate_video_thumbnail(script, content_type):
             title_font = ImageFont.truetype(generator.montserrat_bold, template['font_size'])
             subtitle_font = ImageFont.truetype(generator.roboto_regular, template['subtitle_size'])
         except Exception as e:
-            print(colored(f"Error loading fonts: {str(e)}", "red"))
+            log_warning(f"Error loading fonts: {str(e)}")
             title_font = ImageFont.load_default()
             subtitle_font = ImageFont.load_default()
             
         draw = ImageDraw.Draw(img)
         
+        # Instead of directly using the template text, save it to a temporary file first
+        temp_text_file = f"temp/thumbnails/text_{timestamp}.txt"
+        with open(temp_text_file, "w", encoding="utf-8") as f:
+            f.write(template['text'])
+        
+        # Read it back to ensure proper encoding
+        with open(temp_text_file, "r", encoding="utf-8") as f:
+            safe_text = f.read().strip()
+        
         # Add text with enhanced shadow
         generator.draw_enhanced_text(
             draw, 
-            template['text'], 
+            safe_text, 
             title_font, 
             template['text_color'],
             template['shadow_color'],
             offset_y=-200
         )
         
+        # Do the same for subtitle
+        temp_subtitle_file = f"temp/thumbnails/subtitle_{timestamp}.txt"
+        with open(temp_subtitle_file, "w", encoding="utf-8") as f:
+            f.write(template['subtitle'])
+        
+        # Read it back to ensure proper encoding
+        with open(temp_subtitle_file, "r", encoding="utf-8") as f:
+            safe_subtitle = f.read().strip()
+        
         generator.draw_enhanced_text(
             draw, 
-            template['subtitle'], 
+            safe_subtitle, 
             subtitle_font,
             template['text_color'],
             template['shadow_color'],
@@ -1965,20 +1932,45 @@ def generate_video_thumbnail(script, content_type):
         
         # Save with high quality
         img.save(output_path, 'JPEG', quality=95)
-        print(colored(f"✓ Generated thumbnail: {output_path}", "green"))
+        log_success(f"Generated thumbnail: {output_path}")
         
-        # Clean up temporary script file
+        # Clean up temporary files
         try:
-            os.remove(temp_script_path)
+            os.remove(temp_text_file)
+            os.remove(temp_subtitle_file)
         except:
             pass
             
         return output_path
-    
+        
     except Exception as e:
-        print(colored(f"Error generating thumbnail: {str(e)}", "red"))
-        traceback.print_exc()  # Print full traceback for debugging
-        return None
+        log_error(f"Error generating thumbnail: {str(e)}")
+        traceback.print_exc()
+        
+        # Try a simpler fallback approach
+        try:
+            log_warning("Attempting fallback thumbnail generation")
+            
+            # Create a simple solid color background
+            img = Image.new('RGB', (1080, 1920), "#1E1E1E")
+            draw = ImageDraw.Draw(img)
+            
+            # Use a simple default font
+            font = ImageFont.load_default()
+            
+            # Draw a simple text
+            channel_text = content_type.replace('_', ' ').title()
+            draw.text((540, 960), channel_text, fill="white", anchor="mm", font=font)
+            
+            # Save the fallback thumbnail
+            fallback_path = f"temp/thumbnails/{content_type}_fallback_{timestamp}.jpg"
+            img.save(fallback_path, 'JPEG', quality=95)
+            log_warning(f"Generated fallback thumbnail: {fallback_path}")
+            
+            return fallback_path
+        except Exception as fallback_error:
+            log_error(f"Fallback thumbnail generation also failed: {str(fallback_error)}")
+            return None
 
 if __name__ == "__main__":
     # Display a colorful banner when running directly

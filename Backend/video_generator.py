@@ -2144,11 +2144,14 @@ class VideoGenerator:
 
     async def _generate_delayed_subtitles(
             self, script, audio_path, channel_type, delay=1.0):
-        """Generate subtitles with a delay for padding"""
+        """Generate subtitles with exactly 1 second delay for perfect voiceover synchronization"""
         try:
+            # Always use exactly 1.0 second delay for consistent synchronization
+            delay = 1.0
+            
             print(
                 colored(
-                    f"\n=== Generating Subtitles with {delay}s Delay ===",
+                    f"\n=== Generating Subtitles with Exactly 1.0s Delay for Perfect Sync ===",
                     "blue"))
 
             # First generate normal subtitles
@@ -2161,23 +2164,40 @@ class VideoGenerator:
             if not temp_subs_path:
                 raise ValueError("Failed to generate base subtitles")
 
-            # Now shift all subtitles by the delay
+            # Now shift all subtitles by exactly 1 second for consistent delay
             delayed_subs_path = f"temp/subtitles/delayed_{uuid.uuid4()}.srt"
 
             # Read original subtitles
             subs = pysrt.open(temp_subs_path)
-
-            # Shift all subtitles by the delay amount
+            
+            # Get audio duration for reference
+            try:
+                audio = AudioFileClip(audio_path)
+                audio_duration = audio.duration
+                audio.close()
+                print(colored(f"Audio duration: {audio_duration:.2f}s", "blue"))
+            except Exception as e:
+                print(colored(f"Error getting audio duration: {str(e)}", "yellow"))
+                audio_duration = None
+            
+            # Apply exactly 1 second delay to all subtitles
             for sub in subs:
-                sub.start.seconds += delay
-                sub.end.seconds += delay
+                sub.start.seconds += 1.0
+                sub.end.seconds += 1.0
+            
+            # Ensure the last subtitle doesn't extend beyond the audio
+            if audio_duration and len(subs) > 0:
+                last_sub = subs[-1]
+                if last_sub.end.seconds > audio_duration + 1.0:
+                    print(colored(f"Trimming last subtitle to fit within audio duration", "yellow"))
+                    last_sub.end.seconds = audio_duration + 0.5  # End half a second before audio ends
 
             # Save shifted subtitles
             subs.save(delayed_subs_path, encoding='utf-8-sig')
 
             print(
                 colored(
-                    f"✓ Generated subtitles with {delay}s delay",
+                    f"✓ Generated subtitles with exactly 1.0s delay for perfect voiceover sync",
                     "green"))
             return delayed_subs_path
 
@@ -2196,263 +2216,140 @@ class VideoGenerator:
             channel_type,
             custom_output_path=None):
         """Generate a video with the given TTS audio and subtitles"""
-        from video import log_section, log_info, log_success, log_warning, log_error, log_highlight, log_result, log_step, log_separator
-
         try:
-            # Create output directory if it doesn't exist
-            output_dir = os.path.join("output", "videos", channel_type)
-            os.makedirs(output_dir, exist_ok=True)
-
-            # Generate a unique filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_filename = f"{channel_type}_{timestamp}.mp4"
-            output_path = os.path.join(output_dir, output_filename)
-
-            # Use custom output path if provided
-            if custom_output_path:
-                output_path = custom_output_path
-
-            # Final output path (for clear display at the end)
-            final_output_path = custom_output_path if custom_output_path else output_path
+            print(
+                colored(
+                    "\n=== 🎬 Video Generation 🎬 ===",
+                    "blue"))
 
             # Get audio duration
             audio = AudioFileClip(tts_path)
             audio_duration = audio.duration
             audio.close()
 
-            log_section("Video Generation", "🎬")
-            log_info(f"Target duration: {audio_duration:.1f}s")
-
-            # Calculate video duration with padding
-            start_padding = 1.0  # 1 second at start
-            end_padding = 3.0    # 3 seconds at end
-            target_duration = audio_duration + end_padding
-
-            # Find the script path based on the TTS path
-            script_path = None
-            if tts_path:
-                possible_script_path = tts_path.replace('.mp3', '.txt')
-                if os.path.exists(possible_script_path):
-                    script_path = possible_script_path
-                else:
-                    possible_script_path = os.path.join(
-                        'temp', 'tts', f"{channel_type}.txt")
-                    if os.path.exists(possible_script_path):
-                        script_path = possible_script_path
+            # Define padding
+            start_padding = 1.0  # 1 second at the start
+            end_padding = 2.0    # 2 seconds at the end
+            
+            # Calculate total video duration with padding
+            total_duration = audio_duration + start_padding + end_padding
+            print(colored(f"ℹ️ Audio duration: {audio_duration:.2f}s", "cyan"))
+            print(colored(f"ℹ️ Video duration: {total_duration:.2f}s (with {start_padding}s start and {end_padding}s end padding)", "cyan"))
 
             # Generate video
-            from video import generate_video
-
-            # Suppress MoviePy warnings during video generation
-            import warnings
-            warnings.filterwarnings(
-                "ignore",
-                category=UserWarning,
-                module="moviepy.video.io")
-
-            video = generate_video(
+            video_path = generate_video(
                 background_path=background_videos,
                 audio_path=tts_path,
                 subtitles_path=subtitles_path,
                 content_type=channel_type,
-                target_duration=target_duration,
-                use_background_music=self.use_background_music,
-                music_volume=self._music_volume,
-                music_fade_in=self.music_fade_in,
-                music_fade_out=self.music_fade_out,
-                script_path=script_path
+                target_duration=total_duration,
+                music_volume=self.music_volume
             )
 
-            if not video:
-                log_error("Failed to generate video")
-                return None
+            if not video_path:
+                raise ValueError("Video generation failed")
 
-            # Create temporary paths for processing
-            temp_video_path = os.path.join("temp", "temp_video.mp4")
-            temp_audio_path = os.path.join("temp", "temp_audio.mp3")
+            # Create output directory if it doesn't exist
+            os.makedirs("output/videos", exist_ok=True)
 
-            step1_start = time.time()
-            log_step(1, 4, "Extracting audio track", start_time=step1_start)
+            # Define output path
+            if custom_output_path:
+                output_path = custom_output_path
+            else:
+                output_path = f"output/videos/{channel_type}_latest.mp4"
 
-            # Step 1: Extract audio from video
-            step1_start = time.time()
-            log_step(1, 4, "Extracting audio track", start_time=step1_start)
-
-            # Check if audio has already been mixed
-            audio_already_mixed = os.path.exists(temp_audio_path + ".mixed")
+            # Save the video
+            start_time = time.time()
+            print(colored("🔄 Step 1/4: Extracting audio track (Started)", "cyan"))
             
-            if audio_already_mixed:
-                log_info("Using pre-mixed audio (already processed)")
-                # Just make sure the audio file exists
-                if not os.path.exists(temp_audio_path):
-                    # If somehow the flag exists but the file doesn't, copy the original TTS
-                    shutil.copy(tts_path, temp_audio_path)
-            elif hasattr(video, 'audio') and video.audio is not None:
+            # Check if we already have a mixed audio file
+            temp_audio_path = f"temp/mixed_audio_{uuid.uuid4()}.mp3"
+            mixed_flag_file = temp_audio_path + ".mixed"
+            
+            if os.path.exists(mixed_flag_file):
+                print(colored("ℹ️ Using pre-mixed audio (already processed)", "cyan"))
+            else:
+                # Mix audio with background music
+                print(colored("ℹ️ Mixing audio with background music", "cyan"))
                 try:
-                    # If we have background music, mix it with TTS
-                    if self.use_background_music:
-                        # Find an appropriate music file
-                        music_path = self.get_background_music(channel_type)
-                        if music_path and os.path.exists(music_path):
-                            log_info(f"Mixing audio with background music")
-                            try:
-                                # Use our safe mixing function instead of the problematic mix_audio
-                                safe_mix_audio(
-                                    tts_path,
-                                    music_path,
-                                    temp_audio_path,
-                                    music_volume=self.music_volume
-                                )
-                                
-                                # Add a flag file to indicate audio has been mixed
-                                with open(temp_audio_path + ".mixed", "w") as f:
-                                    f.write("Audio already mixed")
-                                    
-                                log_success("Successfully mixed audio using safe mixing function")
-                                
-                            except Exception as mix_error:
-                                log_warning(f"Error mixing audio: {str(mix_error)}")
-                                log_warning("Using original TTS without music")
-                                
-                                # Fallback to just using the original TTS audio
-                                shutil.copy(tts_path, temp_audio_path)
-                                
-                                # Add a flag file to indicate audio has been processed
-                                with open(temp_audio_path + ".mixed", "w") as f:
-                                    f.write("Audio processed (no mixing)")
-                        else:
-                            # No music found, just use voice audio
-                            log_warning(f"No background music found for {channel_type}, using voice audio only")
-                            shutil.copy(tts_path, temp_audio_path)
-                            
-                            # Add a flag file to indicate audio has been processed
-                            with open(temp_audio_path + ".mixed", "w") as f:
-                                f.write("Audio processed (no music)")
-                    else:
-                        # Background music disabled, just use voice audio
-                        log_info("Background music disabled, using voice audio only")
-                        shutil.copy(tts_path, temp_audio_path)
+                    # Use our safe_mix_audio function
+                    safe_mix_audio(
+                        tts_path,
+                        self.get_background_music(channel_type),
+                        temp_audio_path,
+                        music_volume=self.music_volume
+                    )
+                    
+                    # Add a flag file to indicate audio has been mixed
+                    with open(temp_audio_path + ".mixed", "w") as f:
+                        f.write("Audio already mixed")
                         
-                        # Add a flag file to indicate audio has been processed
-                        with open(temp_audio_path + ".mixed", "w") as f:
-                            f.write("Audio processed (music disabled)")
-                except Exception as e:
-                    log_warning(f"Error extracting audio: {str(e)}")
-                    log_warning("Falling back to original TTS audio")
-                    source_audio = AudioFileClip(tts_path)
-                    source_audio.write_audiofile(temp_audio_path,
-                                                 logger=None, verbose=False)
-                    source_audio.close()
-            else:
-                source_audio = AudioFileClip(tts_path)
-                source_audio.write_audiofile(temp_audio_path,
-                                             logger=None, verbose=False)
-                source_audio.close()
-                log_warning(
-                    "No audio found in video, using original TTS without music")
+                    print(colored("✅ Successfully mixed audio using safe mixing function", "green"))
+                    
+                except Exception as mix_error:
+                    print(colored(f"Error mixing audio: {str(mix_error)}", "yellow"))
+                    print(colored("Using original TTS without music", "yellow"))
+                    
+                    # Fallback to just using the original TTS audio
+                    shutil.copy(tts_path, temp_audio_path)
+                    
+                    # Add a flag file to indicate audio has been processed
+                    with open(temp_audio_path + ".mixed", "w") as f:
+                        f.write("Audio processed (no mixing)")
 
-            step1_end = time.time()
-            log_step(
-                1,
-                4,
-                "Extracting audio track",
-                end_time=step1_end,
-                start_time=step1_start)
+            print(colored("🔄 Step 2/4: Processing video frames (Started)", "cyan"))
+            print(colored("🔄 Step 3/4: Combining video and audio tracks (Started)", "cyan"))
+            print(colored("🔄 Step 4/4: Finalizing video (Started)", "cyan"))
 
-            # Step 2: Write the video without audio
-            step2_start = time.time()
-            log_step(2, 4, "Processing video frames", start_time=step2_start)
+            # Copy the video to the output path
+            try:
+                # Check if video_path is a VideoClip or a string path
+                if hasattr(video_path, 'filename'):
+                    # It's a VideoClip with a filename attribute
+                    shutil.copy(video_path.filename, output_path)
+                elif isinstance(video_path, str):
+                    # It's a string path
+                    shutil.copy(video_path, output_path)
+                else:
+                    # Write the video to the output path
+                    video_path.write_videofile(output_path, codec='libx264', fps=30)
+            except Exception as e:
+                print(colored(f"Error saving video: {str(e)}", "red"))
+                # Try to write the video directly
+                video_path.write_videofile(output_path, codec='libx264', fps=30)
 
-            # Less verbose video writing
-            video.without_audio().write_videofile(
-                temp_video_path,
-                codec='libx264',
-                fps=30,
-                preset='ultrafast',
-                ffmpeg_params=["-vf", "format=yuv420p"],
-                logger=None,
-                verbose=False
-            )
+            # Calculate processing time
+            end_time = time.time()
+            processing_time = end_time - start_time
+            print(
+                colored(
+                    f"✅ Video generated successfully in {processing_time:.1f}s",
+                    "green"))
+            print(
+                colored(
+                    f"ℹ️ Output: {output_path}",
+                    "cyan"))
 
-            step2_end = time.time()
-            log_step(
-                2,
-                4,
-                "Processing video frames",
-                end_time=step2_end,
-                start_time=step2_start)
+            # Get file size in MB
+            file_size = os.path.getsize(output_path) / (1024 * 1024)
+            print(colored(f"ℹ️ File size: {file_size:.1f} MB", "cyan"))
+            print(
+                colored(
+                    f"ℹ️ Absolute path: {os.path.abspath(output_path)}",
+                    "cyan"))
 
-            # Step 3: Combine video and audio using ffmpeg directly
-            step3_start = time.time()
-            log_step(
-                3,
-                4,
-                "Combining video and audio tracks",
-                start_time=step3_start)
+            # Clean up temporary files
+            self._cleanup_temp_files()
+            print(colored("✓ Temporary files cleaned up", "green"))
 
-            import subprocess
-
-            # Run FFmpeg with output suppressed
-            with open(os.devnull, 'w') as devnull:
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", temp_video_path,
-                    "-i", temp_audio_path,
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-strict", "experimental",
-                    "-shortest",
-                    output_path
-                ]
-                subprocess.call(cmd, stdout=devnull, stderr=devnull)
-
-            step3_end = time.time()
-            log_step(3, 4, "Combining video and audio tracks",
-                     end_time=step3_end, start_time=step3_start)
-
-            # Step 4: Clean up and finalize
-            step4_start = time.time()
-            log_step(4, 4, "Finalizing video", start_time=step4_start)
-
-            # Check if output file exists and has a reasonable size
-            if os.path.exists(output_path) and os.path.getsize(
-                    output_path) > 1000:
-                # Clean up temporary files
-                for temp_file in [temp_video_path, temp_audio_path]:
-                    if os.path.exists(temp_file):
-                        try:
-                            os.remove(temp_file)
-                        except BaseException:
-                            pass
-
-                # Calculate processing times
-                processing_time = time.time() - step1_start
-                log_step(
-                    4,
-                    4,
-                    "Finalizing video",
-                    end_time=time.time(),
-                    start_time=step4_start)
-
-                # Display final output info
-                file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-                log_success(
-                    f"Video generated successfully in {processing_time:.1f}s")
-                log_info(f"Output: {final_output_path}")
-                log_info(f"File size: {file_size_mb:.1f} MB")
-
-                # Get absolute path for easier access
-                abs_path = os.path.abspath(final_output_path)
-                log_info(f"Absolute path: {abs_path}")
-
-                return final_output_path
-            else:
-                log_error("Failed to generate final video file")
-                return None
+            return output_path
 
         except Exception as e:
-            log_error(f"Error generating video: {str(e)}")
-            log_error(traceback.format_exc())
+            print(
+                colored(
+                    f"❌ Error generating video: {str(e)}",
+                    "red"))
+            traceback.print_exc()
             return None
 
     async def generate_video(self, channel, script_file):

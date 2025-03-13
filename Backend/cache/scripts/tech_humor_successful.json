@@ -1,109 +1,5 @@
 [
   {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \n\nBecause Oct 31 == Dec 25!  \n\n\ud83e\udd13\ud83d\udcbb  \n\nFollow for more tech humor! \ud83d\ude80",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "23/100 max",
-      "estimated_duration": "11.0s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741792435.8736997
-  },
-  {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ufffd\ud83c\udf83  \nBecause Oct 31 == Dec 25! \ud83e\uddd1\u200d\ud83d\udcbb  \n(It\u2019s a binary joke\u2026 you either get it or you don\u2019t.) \ud83d\ude0f  \n\nFollow for more tech humor! \ud83d\ude80",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "35/100 max",
-      "estimated_duration": "16.8s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741792540.3729951
-  },
-  {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(If you get it, you\u2019re a true nerd. If not, go learn hex.) \ud83d\ude02  \nFollow for more tech humor! \ud83d\ude80",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "37/100 max",
-      "estimated_duration": "17.8s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741792939.8344483
-  },
-  {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \n\nBecause Oct 31 == Dec 25! \ud83e\udd13  \n\nFollow for more tech humor! \ud83d\ude80",
-    "metrics": {
-      "lines": "3/10 max",
-      "words": "23/100 max",
-      "estimated_duration": "11.0s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741793113.4097302
-  },
-  {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(Yes, it\u2019s a base-8 joke. Don\u2019t @ me.)  \n\nFollow for more tech humor! \ud83d\ude80",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "31/100 max",
-      "estimated_duration": "14.9s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741793535.4449203
-  },
-  {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s a binary joke\u2026 you\u2019ll get it eventually.)  \nFollow for more tech humor!",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "30/100 max",
-      "estimated_duration": "14.4s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741795677.557006
-  },
-  {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s a binary joke\u2026 you\u2019ll get it eventually.)  \nFollow for more tech humor! \ud83d\ude80",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "31/100 max",
-      "estimated_duration": "14.9s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741795837.2568545
-  },
-  {
-    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s a binary joke\u2026 you\u2019ll get it eventually.) \ud83d\udcbb  \n\nFollow for more tech humor!",
-    "metrics": {
-      "lines": "4/10 max",
-      "words": "31/100 max",
-      "estimated_duration": "14.9s",
-      "has_intro": false,
-      "has_conclusion": false,
-      "has_hook": false,
-      "has_value_prop": false
-    },
-    "timestamp": 1741796577.6053538
-  },
-  {
     "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n\nFollow for more tech humor! \ud83d\ude80",
     "metrics": {
       "lines": "3/10 max",
@@ -258,5 +154,109 @@
       "has_value_prop": false
     },
     "timestamp": 1741852000.3372002
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n\nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "lines": "3/10 max",
+      "words": "23/100 max",
+      "estimated_duration": "11.0s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741852916.825414
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(If you get it, you\u2019re a real one. \ud83d\udcbb)  \n\nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "32/100 max",
+      "estimated_duration": "15.4s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741853022.2058363
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(It\u2019s a base-8 joke. You\u2019re welcome.)  \n\nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "29/100 max",
+      "estimated_duration": "13.9s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741853444.787768
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(If you know, you know.)  \n\nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "28/100 max",
+      "estimated_duration": "13.4s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741853841.589127
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(If you know, you know.) \ud83d\ude0f  \nFollow for more tech humor!",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "28/100 max",
+      "estimated_duration": "13.4s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741853926.496214
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n*Binary humor hits different.*  \n\nFollow for more tech humor!",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "26/100 max",
+      "estimated_duration": "12.5s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741854122.5488966
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\uddd1\u200d\ud83d\udcbb  \n(If you get it, you\u2019re a real dev. If not, go learn hex. \ud83d\ude09)  \nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "37/100 max",
+      "estimated_duration": "17.8s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741854217.5974162
+  },
+  {
+    "script": "Why do programmers always mix up Halloween and Christmas? \ud83c\udf83\ud83c\udf84  \nBecause Oct 31 == Dec 25! \ud83e\udd13  \n(If you don\u2019t get it, you\u2019re not a true dev.) \ud83d\ude05  \n\nFollow for more tech humor! \ud83d\ude80",
+    "metrics": {
+      "lines": "4/10 max",
+      "words": "34/100 max",
+      "estimated_duration": "16.3s",
+      "has_intro": false,
+      "has_conclusion": false,
+      "has_hook": false,
+      "has_value_prop": false
+    },
+    "timestamp": 1741854500.6523433
   }
 ]

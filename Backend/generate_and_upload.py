@@ -16,7 +16,7 @@ import random
 import nltk
 from joke_provider import JokeProvider
 from content_learning_system import ContentLearningSystem
-from video import log_section, log_info, log_success, log_warning, log_error, log_step, log_highlight, log_result, log_separator
+from video import log_section, log_info, log_success, log_warning, log_error, log_step, log_highlight, log_result, log_separator, generate_video_thumbnail
 import time
 
 # Download wordnet if not already downloaded
@@ -112,20 +112,34 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
         
         # Generate thumbnail
         log_section("Generating Thumbnail", "🖼️")
-        thumbnail_path = thumb_gen.generate_thumbnail(channel_type, joke)
+        try:
+            # Use the video_generator's method to generate thumbnail
+            thumbnail_path = generate_video_thumbnail(joke, channel_type)
+            
+            if not thumbnail_path:
+                log_warning("Video thumbnail generation failed, trying alternative method")
+                # Try alternative method with just the title
+                title = joke.split('\n')[0]
+                thumbnail_path = thumb_gen.generate_thumbnail(channel_type)
+                
+                if not thumbnail_path:
+                    log_error("All thumbnail generation methods failed")
+                    thumbnail_path = None
+            else:
+                log_success("Thumbnail generated")
+        except Exception as e:
+            log_error(f"Thumbnail generation error: {str(e)}")
+            thumbnail_path = None
         
-        if not thumbnail_path:
-            log_error("Thumbnail generation failed")
-            return None
-        
-        log_success("Thumbnail generated")
+        # Extract title from script (first line)
+        title = joke.split('\n')[0]
         
         # Return video details
         return {
             'channel_type': channel_type,
             'video_path': video_path,
             'thumbnail_path': thumbnail_path,
-            'title': f"Tech Humor: {joke.splitlines()[0][:50]}",
+            'title': title,
             'description': joke + "\n\n#tech #programming #humor #shorts",
             'tags': ['tech', 'programming', 'humor', 'shorts', 'coding', 'developer', 'software'],
             'script': joke
@@ -178,13 +192,24 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
         
         # Generate thumbnail
         log_section("Generating Thumbnail", "🖼️")
-        thumbnail_path = thumb_gen.generate_thumbnail(channel_type, script)
-        
-        if not thumbnail_path:
-            log_error("Thumbnail generation failed")
-            return None
-        
-        log_success("Thumbnail generated")
+        try:
+            # Use the video_generator's method to generate thumbnail
+            thumbnail_path = generate_video_thumbnail(script, channel_type)
+            
+            if not thumbnail_path:
+                log_warning("Video thumbnail generation failed, trying alternative method")
+                # Try alternative method with just the title
+                title = script.split('\n')[0]
+                thumbnail_path = thumb_gen.generate_thumbnail(channel_type)
+                
+                if not thumbnail_path:
+                    log_error("All thumbnail generation methods failed")
+                    thumbnail_path = None
+            else:
+                log_success("Thumbnail generated")
+        except Exception as e:
+            log_error(f"Thumbnail generation error: {str(e)}")
+            thumbnail_path = None
         
         # Extract title from script (first line)
         title = script.split('\n')[0]
