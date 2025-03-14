@@ -1,0 +1,13 @@
+Emoji Test Video 🎬
+
+Rocket: 🚀 - For when your ideas take off!
+Fire: 🔥 - When something is hot and trending
+Game: 🎮 - For gaming content
+Target: 🎯 - When you hit your goals
+Trophy: 🏆 - For celebrating achievements
+Thumbs Up: 👍 - For approval and positivity
+Smile: 😊 - For happiness and joy
+Party: 🎉 - For celebrations
+100: 💯 - For perfect scores
+
+All emojis should render correctly! 🎬🚀🔥🎮🎯🏆👍😊🎉💯

@@ -1273,6 +1273,12 @@ class VideoGenerator:
         """Generate subtitles for the video"""
         try:
             print(colored("\n=== Generating Subtitles ===", "blue"))
+            
+            # Log that we're using the original script with emojis
+            print(colored("ℹ️ Using original script with emojis for subtitles", "blue"))
+            
+            # Print a sample of the script to verify emojis are present
+            print(colored(f"Script sample: {script[:100]}...", "cyan"))
 
             # Directly use the function from video.py
             subtitles_path = generate_subtitles(

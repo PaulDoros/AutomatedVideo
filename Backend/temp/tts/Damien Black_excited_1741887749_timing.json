@@ -1,0 +1,30 @@
+[
+  {
+    "sentence": "Why do programmers always mix up Halloween and Christmas?",
+    "start_time": 0.0,
+    "end_time": 3.937,
+    "duration": 3.937,
+    "emotion": "curious"
+  },
+  {
+    "sentence": "Because Oct 31 Dec 25!",
+    "start_time": 3.937,
+    "end_time": 6.9030000000000005,
+    "duration": 2.966,
+    "emotion": "energetic"
+  },
+  {
+    "sentence": "If you get it, youre a true dev. If not, go debug your humor.",
+    "start_time": 6.9030000000000005,
+    "end_time": 12.696000000000002,
+    "duration": 5.793,
+    "emotion": "excited"
+  },
+  {
+    "sentence": "Follow for more tech humor!",
+    "start_time": 12.696000000000002,
+    "end_time": 14.499000000000002,
+    "duration": 1.803,
+    "emotion": "energetic"
+  }
+]
