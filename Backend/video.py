@@ -1345,7 +1345,7 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
         
         # First pass: adjust subtitle timings to prevent overlapping and ensure minimum display time
         min_display_time = 1.5  # Minimum time a subtitle should be displayed (in seconds)
-        min_gap_between_subs = 0.1  # Minimum gap between subtitles (in seconds)
+        min_gap_between_subs = 0.3  # Increased from 0.1 to 0.3 seconds - minimum gap between subtitles
         
         # Ensure each subtitle has minimum display time
         for i, sub in enumerate(subs):
@@ -1358,22 +1358,21 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 sub.end.seconds = sub.start.seconds + min_display_time
                 log_info(f"Extended subtitle {i+1} duration to {min_display_time}s (was {duration:.2f}s)")
         
-        # Ensure no overlapping between subtitles
+        # Ensure no overlapping between subtitles - CRITICAL FIX
         for i in range(len(subs) - 1):
             current_end = subs[i].end.ordinal / 1000.0
             next_start = subs[i+1].start.ordinal / 1000.0
             
             # If next subtitle starts before current ends (plus gap)
             if next_start < current_end + min_gap_between_subs:
-                # Two options: either push next subtitle later, or cut current subtitle shorter
-                # We prefer to push next subtitle later to ensure minimum display time
+                # Force the next subtitle to start after the current one ends plus the gap
                 subs[i+1].start.seconds = subs[i].end.seconds + min_gap_between_subs
                 
                 # Also adjust end time to maintain duration
-                duration = subs[i+1].end.ordinal / 1000.0 - next_start
-                subs[i+1].end.seconds = subs[i+1].start.seconds + duration
+                original_duration = subs[i+1].end.ordinal / 1000.0 - next_start
+                subs[i+1].end.seconds = subs[i+1].start.seconds + original_duration
                 
-                log_info(f"Adjusted timing for subtitle {i+2} to avoid overlap with subtitle {i+1}")
+                log_info(f"Fixed overlap: Subtitle {i+2} now starts {min_gap_between_subs}s after subtitle {i+1} ends")
         
         # Check if the last subtitle ends before the video ends
         if subs and len(subs) > 0:
@@ -1385,6 +1384,9 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
             if last_end_time < video_duration - 0.5:
                 log_info(f"Extending last subtitle to match video duration")
                 last_sub.end.seconds = video_duration - 0.5  # End 0.5 second before video end
+        
+        # Store subtitle timing information for debugging
+        subtitle_timing_info = []
         
         # Process each subtitle
         for i, sub in enumerate(subs):
@@ -1460,6 +1462,15 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 # Log typing speed for debugging
                 log_info(f"Subtitle {i+1} typing speed: {chars_per_second:.1f} chars/sec (duration: {duration:.2f}s, chars: {total_chars})")
                 
+                # Store timing info for debugging
+                subtitle_timing_info.append({
+                    'index': i+1,
+                    'text': text[:30] + ('...' if len(text) > 30 else ''),
+                    'start': start_time,
+                    'end': end_time,
+                    'duration': duration
+                })
+                
                 # Create typing effect clips
                 typing_clips = []
                 
@@ -1503,6 +1514,12 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                             if i == len(subs) - 1:
                                 char_duration = base_video.duration - char_time
                         
+                        # CRITICAL FIX: Ensure this clip ends before the next subtitle starts
+                        if i < len(subs) - 1:
+                            next_sub_start = subs[i+1].start.ordinal / 1000.0
+                            if char_time + char_duration > next_sub_start - min_gap_between_subs:
+                                char_duration = max(0.1, next_sub_start - min_gap_between_subs - char_time)
+                        
                         # Set timing and position
                         txt_clip = txt_clip.set_start(char_time).set_duration(char_duration)
                         txt_clip = txt_clip.set_position(('center', vertical_position), relative=True)
@@ -1540,6 +1557,13 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                         if i == len(subs) - 1:
                             txt_clip = txt_clip.set_duration(base_video.duration - start_time)
                         
+                        # CRITICAL FIX: Ensure this clip ends before the next subtitle starts
+                        if i < len(subs) - 1:
+                            next_sub_start = subs[i+1].start.ordinal / 1000.0
+                            if start_time + duration > next_sub_start - min_gap_between_subs:
+                                duration = max(0.1, next_sub_start - min_gap_between_subs - start_time)
+                                txt_clip = txt_clip.set_duration(duration)
+                        
                         # Add fade effects
                         fade_duration = min(0.2, duration / 5)
                         txt_clip = txt_clip.crossfadein(fade_duration).crossfadeout(fade_duration)
@@ -1556,6 +1580,11 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 log_warning(f"Error processing subtitle {i+1}: {str(e)}")
                 traceback.print_exc()
                 continue
+        
+        # Log subtitle timing information for debugging
+        log_info("Subtitle timing summary:")
+        for info in subtitle_timing_info:
+            log_info(f"Subtitle {info['index']}: {info['text']} ({info['start']:.2f}s - {info['end']:.2f}s, duration: {info['duration']:.2f}s)")
         
         # Check if we created any subtitle clips
         if not subtitle_clips:
