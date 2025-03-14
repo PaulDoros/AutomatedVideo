@@ -559,7 +559,8 @@ Style Guidelines:
         4. Actionable takeaways
         5. Natural, conversational tone
         6. Appropriate pacing for short-form video
-        
+        7. Include emojis in the script
+        8. return a clean text script, no markdown or other formatting
         {base_prompt}
         
         Additional guidelines:

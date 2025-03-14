@@ -217,6 +217,52 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
             if clean_sentence.strip():
                 sentences.append(clean_sentence.strip())
         
+        # NEW: Split long sentences into smaller chunks for better readability
+        max_chars_per_subtitle = 100  # Maximum characters per subtitle
+        chunked_sentences = []
+        
+        for sentence in sentences:
+            if len(sentence) <= max_chars_per_subtitle:
+                chunked_sentences.append(sentence)
+            else:
+                # Split by commas, semicolons, or other natural breaks
+                parts = re.split(r'(?<=[,;:])\s+', sentence)
+                current_chunk = ""
+                
+                for part in parts:
+                    if len(current_chunk) + len(part) + 1 <= max_chars_per_subtitle:
+                        if current_chunk:
+                            current_chunk += " " + part
+                        else:
+                            current_chunk = part
+                    else:
+                        if current_chunk:
+                            chunked_sentences.append(current_chunk)
+                        
+                        # If a single part is too long, split it by words
+                        if len(part) > max_chars_per_subtitle:
+                            words = part.split()
+                            current_chunk = ""
+                            
+                            for word in words:
+                                if len(current_chunk) + len(word) + 1 <= max_chars_per_subtitle:
+                                    if current_chunk:
+                                        current_chunk += " " + word
+                                    else:
+                                        current_chunk = word
+                                else:
+                                    if current_chunk:
+                                        chunked_sentences.append(current_chunk)
+                                    current_chunk = word
+                        else:
+                            current_chunk = part
+                
+                if current_chunk:
+                    chunked_sentences.append(current_chunk)
+        
+        # Replace the original sentences with the chunked ones
+        sentences = chunked_sentences
+        
         # Count valid subtitle segments
         subtitle_count = len(sentences)
         
@@ -817,8 +863,8 @@ def resize_to_vertical(clip):
 def get_emoji_image(emoji_char, size=120):
     """Get colored emoji image using Twitter's emoji CDN with improved caching and fallbacks"""
     try:
-        # Debug: Log the emoji character we're trying to get
-        print(colored(f"Getting emoji image for: {emoji_char} (Unicode: {'-'.join(f'{ord(c):x}' for c in emoji_char)})", "cyan"))
+        # Debug: Log the emoji character we're trying to get (reduced logging)
+        print(colored(f"Getting emoji image for: {emoji_char} with size {size}", "cyan"))
         
         # Create cache directory if it doesn't exist
         cache_dir = "temp/emoji_cache"
@@ -851,15 +897,13 @@ def get_emoji_image(emoji_char, size=120):
             f"https://unpkg.com/twemoji@latest/assets/72x72/{emoji_id}.png"
         ]
         
-        # Debug: Log the CDN URLs we're trying
-        for i, url in enumerate(cdn_urls):
-            print(colored(f"CDN URL {i+1}: {url}", "cyan"))
+        # Reduced logging - don't log all CDN URLs
+        print(colored(f"Trying to download emoji from: {cdn_urls[0]}", "cyan"))
         
         # Try each CDN until we get a successful response
         emoji_img = None
         for url in cdn_urls:
             try:
-                print(colored(f"Trying to download emoji from: {url}", "cyan"))
                 response = requests.get(url, timeout=3)
                 if response.status_code == 200:
                     print(colored(f"Successfully downloaded emoji from: {url}", "green"))
@@ -874,9 +918,10 @@ def get_emoji_image(emoji_char, size=120):
                     
                     return emoji_img
                 else:
-                    print(colored(f"Failed to download emoji from {url}: HTTP {response.status_code}", "yellow"))
+                    # Reduced logging - don't log every failed attempt
+                    pass
             except Exception as e:
-                print(colored(f"Error downloading emoji from {url}: {str(e)}", "yellow"))
+                # Reduced logging - don't log every exception
                 continue
         
         # If all CDNs fail, try with just the first character if it's a multi-character emoji
@@ -931,8 +976,8 @@ def create_fallback_emoji(size=120, emoji_char=None):
 def create_text_with_emoji(txt, size=(1080, 800)):
     """Create text image with emoji support - OPTIMIZED FOR SHORTS"""
     try:
-        # Debug: Log the input text with emojis
-        print(colored(f"Creating text with emojis: {txt}", "cyan"))
+        # Debug: Log the input text with emojis (reduced logging)
+       
         
         # Create a transparent background
         img = Image.new('RGBA', size, (0, 0, 0, 0))
@@ -944,7 +989,7 @@ def create_text_with_emoji(txt, size=(1080, 800)):
             if not os.path.exists(font_path):
                 font_path = "C:/Windows/Fonts/Arial.ttf"  # Fallback for Windows
             font = ImageFont.truetype(font_path, 60)  # Reduced from 70 for better fit on Shorts
-            print(colored(f"Using font: {font_path}", "cyan"))
+         
         except Exception as font_error:
             print(colored(f"Error loading font: {str(font_error)}", "yellow"))
             font = ImageFont.load_default()
@@ -980,8 +1025,8 @@ def create_text_with_emoji(txt, size=(1080, 800)):
         # Calculate vertical starting position to center all lines
         y = (size[1] - total_line_height) // 2
         
-        # Debug: Log the lines we're going to process
-        print(colored(f"Processing {len(lines)} lines of text", "cyan"))
+        # Debug: Log the number of lines (reduced logging)
+       
         
         # Pre-calculate the width of each line including emojis for better centering
         line_widths = []
@@ -1036,10 +1081,12 @@ def create_text_with_emoji(txt, size=(1080, 800)):
         y_offset = y
         
         for line_idx, line in enumerate(lines):
-            print(colored(f"Processing line {line_idx+1}: {line}", "cyan"))
+            # Reduced logging - only log line number and content for first line
+            if line_idx == 0:
+               
             
             # Calculate x position to center this specific line using pre-calculated width
-            x = (size[0] - line_widths[line_idx]) // 2
+                x = (size[0] - line_widths[line_idx]) // 2
             
             # Second pass: actually render the text and emojis
             x_offset = x
@@ -1058,11 +1105,13 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                 if is_emoji_char:
                     # Render emoji as image
                     emoji_size = int(font.size * 1.2)  # Make emoji slightly larger than text
-                    print(colored(f"Getting emoji image for: {char} with size {emoji_size}", "cyan"))
+                    # Reduced logging for emoji processing
                     emoji_img = get_emoji_image(char, size=emoji_size)
                     
                     if emoji_img:
-                        print(colored(f"Successfully got emoji image for: {char}", "green"))
+                        # Reduced logging - only log success for first emoji
+                        if i < 5:
+                            print(colored(f"Successfully got emoji image for: {char}", "green"))
                         # Remove vertical offset to align emoji with text baseline
                         emoji_y_offset = -5  # Adjust this value to move emoji up (negative value)
                         # Paste emoji image at current position with vertical alignment adjustment
@@ -1112,7 +1161,7 @@ def create_text_with_emoji(txt, size=(1080, 800)):
         os.makedirs(debug_dir, exist_ok=True)
         debug_path = f"{debug_dir}/text_with_emoji_{int(time.time())}.png"
         img.save(debug_path, "PNG")
-        print(colored(f"Saved debug image to: {debug_path}", "cyan"))
+       
         
         return img
     except Exception as e:
@@ -1356,7 +1405,9 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
             # Ensure minimum display time
             if duration < min_display_time:
                 sub.end.seconds = sub.start.seconds + min_display_time
-                log_info(f"Extended subtitle {i+1} duration to {min_display_time}s (was {duration:.2f}s)")
+                # Reduced logging - only log if significant adjustment
+                if duration < min_display_time - 0.5:
+                    log_info(f"Extended subtitle {i+1} duration to {min_display_time}s (was {duration:.2f}s)")
         
         # Ensure no overlapping between subtitles - CRITICAL FIX
         for i in range(len(subs) - 1):
@@ -1372,7 +1423,9 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 original_duration = subs[i+1].end.ordinal / 1000.0 - next_start
                 subs[i+1].end.seconds = subs[i+1].start.seconds + original_duration
                 
-                log_info(f"Fixed overlap: Subtitle {i+2} now starts {min_gap_between_subs}s after subtitle {i+1} ends")
+                # Reduced logging - only log significant adjustments
+                if next_start < current_end:
+                    log_info(f"Fixed overlap: Subtitle {i+2} now starts {min_gap_between_subs}s after subtitle {i+1} ends")
         
         # Check if the last subtitle ends before the video ends
         if subs and len(subs) > 0:
@@ -1416,28 +1469,42 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 text = re.sub(r"\.'\]$", "", text)   # Remove trailing .']
                 text = text.strip()
                 
-                # Log the subtitle text to verify emojis are preserved
-                log_info(f"Subtitle {i+1}: {text}")
+                # Log the subtitle text to verify emojis are preserved - only for first few subtitles
+                if i < 3:
+                    log_info(f"Subtitle {i+1}: {text}")
                 
                 # Skip if text is empty after cleaning
                 if not text:
                     log_warning(f"Skipping empty subtitle {i+1}")
                     continue
                 
-                # Create multiline text for better readability
+                # NEW: Improved line breaking for better readability
+                # Create multiline text with better word wrapping
                 words = text.split()
                 lines = []
                 current_line = ""
-                max_chars_per_line = 30  # Adjusted for vertical format
+                
+                # Adjust max chars per line based on text length
+                # Shorter max length for longer texts to prevent too many lines
+                text_length = len(text)
+                if text_length > 100:
+                    max_chars_per_line = 25  # Very short lines for very long text
+                elif text_length > 70:
+                    max_chars_per_line = 28  # Shorter lines for longer text
+                else:
+                    max_chars_per_line = 30  # Standard line length for normal text
                 
                 for word in words:
+                    # Check if adding this word would exceed the max chars per line
                     if len(current_line) + len(word) + 1 <= max_chars_per_line:
                         current_line = current_line + " " + word if current_line else word
                     else:
+                        # If current line is not empty, add it to lines
                         if current_line:
                             lines.append(current_line)
                         current_line = word
                 
+                # Add the last line if not empty
                 if current_line:
                     lines.append(current_line)
                 
@@ -1459,8 +1526,9 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 # Clamp typing speed within reasonable range
                 chars_per_second = max(min_chars_per_second, min(optimal_chars_per_second, max_chars_per_second))
                 
-                # Log typing speed for debugging
-                log_info(f"Subtitle {i+1} typing speed: {chars_per_second:.1f} chars/sec (duration: {duration:.2f}s, chars: {total_chars})")
+                # Log typing speed for debugging - only for first few subtitles
+                if i < 3:
+                    log_info(f"Subtitle {i+1} typing speed: {chars_per_second:.1f} chars/sec (duration: {duration:.2f}s, chars: {total_chars})")
                 
                 # Store timing info for debugging
                 subtitle_timing_info.append({
@@ -1530,7 +1598,7 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                     # Add all typing clips to the subtitle clips list
                     subtitle_clips.extend(typing_clips)
                     
-                    # Log progress
+                    # Log progress - only for first and last subtitle, and every 5th subtitle
                     if i == 0 or i == len(subs) - 1 or i % max(5, len(subs) // 5) == 0:
                         log_info(f"Created subtitle {i+1}/{len(subs)} with typing effect (Time: {start_time:.2f}s - {end_time:.2f}s)")
                 
@@ -1581,7 +1649,7 @@ def process_subtitles(subs_path, base_video, start_padding=0.0):
                 traceback.print_exc()
                 continue
         
-        # Log subtitle timing information for debugging
+        # Log subtitle timing information for debugging - only essential summary
         log_info("Subtitle timing summary:")
         for info in subtitle_timing_info:
             log_info(f"Subtitle {info['index']}: {info['text']} ({info['start']:.2f}s - {info['end']:.2f}s, duration: {info['duration']:.2f}s)")
