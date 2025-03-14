@@ -999,14 +999,14 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                 char = line[i]
                 
                 # Check if character is an emoji
-                is_emoji = False
+                is_emoji_char = False
                 try:
-                    is_emoji = emoji.is_emoji(char)
+                    is_emoji_char = emoji.is_emoji(char)
                 except:
                     # If emoji check fails, use simple check
-                    is_emoji = ord(char) > 127 and not char.isalpha() and not char.isdigit() and not char.isspace()
+                    is_emoji_char = ord(char) > 127 and not char.isalpha() and not char.isdigit() and not char.isspace()
                 
-                if is_emoji:
+                if is_emoji_char:
                     # Add emoji width (slightly larger than text)
                     emoji_size = int(font.size * 1.2)
                     line_width += emoji_size
@@ -1048,14 +1048,14 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                 char = line[i]
                 
                 # Check if character is an emoji
-                is_emoji = False
+                is_emoji_char = False
                 try:
-                    is_emoji = emoji.is_emoji(char)
+                    is_emoji_char = emoji.is_emoji(char)
                 except:
                     # If emoji check fails, use simple check
-                    is_emoji = ord(char) > 127 and not char.isalpha() and not char.isdigit() and not char.isspace()
+                    is_emoji_char = ord(char) > 127 and not char.isalpha() and not char.isdigit() and not char.isspace()
                 
-                if is_emoji:
+                if is_emoji_char:
                     # Render emoji as image
                     emoji_size = int(font.size * 1.2)  # Make emoji slightly larger than text
                     print(colored(f"Getting emoji image for: {char} with size {emoji_size}", "cyan"))
@@ -1063,8 +1063,10 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                     
                     if emoji_img:
                         print(colored(f"Successfully got emoji image for: {char}", "green"))
-                        # Paste emoji image at current position
-                        img.paste(emoji_img, (x_offset, y_offset - int(emoji_size * 0.2)), emoji_img)
+                        # Remove vertical offset to align emoji with text baseline
+                        emoji_y_offset = -5  # Adjust this value to move emoji up (negative value)
+                        # Paste emoji image at current position with vertical alignment adjustment
+                        img.paste(emoji_img, (x_offset, y_offset + emoji_y_offset), emoji_img)
                         
                         # Move x position forward
                         x_offset += emoji_size
