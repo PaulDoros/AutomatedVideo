@@ -960,7 +960,7 @@ def create_text_with_emoji(txt, size=(1080, 800)):
             test_bbox = draw.textbbox((0, 0), test_line, font=font)
             test_width = test_bbox[2]
             
-            if test_width <= size[0] - 60:  # More padding for safety
+            if test_width <= size[0] - 100:  # Increased padding for better centering
                 current_line = test_line
             else:
                 if current_line:
@@ -983,17 +983,10 @@ def create_text_with_emoji(txt, size=(1080, 800)):
         # Debug: Log the lines we're going to process
         print(colored(f"Processing {len(lines)} lines of text", "cyan"))
         
-        # Process text line by line to handle emojis
-        y_offset = y
-        
-        for line_idx, line in enumerate(lines):
-            print(colored(f"Processing line {line_idx+1}: {line}", "cyan"))
-            
-            # Calculate width of this specific line for proper centering
+        # Pre-calculate the width of each line including emojis for better centering
+        line_widths = []
+        for line in lines:
             line_width = 0
-            emoji_count = 0
-            
-            # First pass: calculate total width including emojis
             i = 0
             while i < len(line):
                 char = line[i]
@@ -1010,7 +1003,6 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                     # Add emoji width (slightly larger than text)
                     emoji_size = int(font.size * 1.2)
                     line_width += emoji_size
-                    emoji_count += 1
                     
                     # Skip any combining characters
                     i += 1
@@ -1038,8 +1030,16 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                     line_width += chunk_width
                     i = j
             
-            # Calculate x position to center this specific line
-            x = (size[0] - line_width) // 2
+            line_widths.append(line_width)
+        
+        # Process text line by line to handle emojis
+        y_offset = y
+        
+        for line_idx, line in enumerate(lines):
+            print(colored(f"Processing line {line_idx+1}: {line}", "cyan"))
+            
+            # Calculate x position to center this specific line using pre-calculated width
+            x = (size[0] - line_widths[line_idx]) // 2
             
             # Second pass: actually render the text and emojis
             x_offset = x
