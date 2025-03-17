@@ -1051,35 +1051,30 @@ class VideoGenerator:
     async def _generate_tts(self, script, channel_type):
         """Generate TTS using either Coqui TTS or OpenAI's voice"""
         try:
-            # First, check if we have a cleaned script in the JSON file
+            # First, check if we have a TTS-friendly script in the JSON file
             json_path = f"cache/scripts/{channel_type}_latest.json"
             if os.path.exists(json_path):
                 try:
                     with open(json_path, "r", encoding="utf-8") as f:
                         script_data = json.load(f)
-                        if "cleaned_script" in script_data and script_data["cleaned_script"].strip(
-                        ):
+                        if "tts_script" in script_data and script_data["tts_script"].strip():
+                            # Use the TTS-friendly script without emojis
+                            clean_script = script_data["tts_script"]
+                            print(colored(f"Using TTS-friendly script from JSON file (emojis removed)", "green"))
+                            print(colored(f"Script for TTS:\n{clean_script}", "blue"))
+                        elif "cleaned_script" in script_data and script_data["cleaned_script"].strip():
+                            # Fall back to the cleaned script if TTS script is not available
                             clean_script = script_data["cleaned_script"]
-                            print(
-                                colored(
-                                    f"Using pre-cleaned script from JSON file",
-                                    "green"))
-                            print(
-                                colored(
-                                    f"Script for TTS:\n{clean_script}",
-                                    "blue"))
+                            print(colored(f"Using pre-cleaned script from JSON file", "green"))
+                            print(colored(f"Script for TTS:\n{clean_script}", "blue"))
+                            # Remove emojis for TTS
+                            clean_script = self._clean_script_for_tts(clean_script)
                         else:
                             # Fall back to cleaning the script ourselves
-                            print(
-                                colored(
-                                    f"No cleaned script found in JSON, cleaning manually",
-                                    "yellow"))
+                            print(colored(f"No cleaned script found in JSON, cleaning manually", "yellow"))
                             clean_script = self._clean_script_for_tts(script)
                 except Exception as e:
-                    print(
-                        colored(
-                            f"Error reading JSON file: {str(e)}",
-                            "yellow"))
+                    print(colored(f"Error reading JSON file: {str(e)}", "yellow"))
                     clean_script = self._clean_script_for_tts(script)
             else:
                 # Clean the script manually

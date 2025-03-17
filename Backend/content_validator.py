@@ -258,8 +258,8 @@ class ScriptGenerator:
             # Get enhanced system prompt for O1
             system_prompt = self.get_system_prompt(channel_type)
             
-            # Get channel-specific prompt
-            content_prompt = self.get_channel_prompt(channel_type, topic)
+            # Get enhanced prompt with specific instructions including emoji requirement
+            content_prompt = self.get_enhanced_prompt(topic, channel_type)
             
             # Add request for thumbnail title in a separate field
             content_prompt += """
@@ -313,10 +313,10 @@ class ScriptGenerator:
                 print(colored(f"\nEstimated Duration: {analysis.get('estimated_duration', 0):.1f}s", "blue"))
                 
                 # Save script and thumbnail title separately
-                self._save_script(script, thumbnail_title, channel_type, is_valid, analysis)
+                cleaned_script = self._save_script(script, thumbnail_title, channel_type, is_valid, analysis)
                 
-                # Return ONLY the script for processing
-                return True, script
+                # Return the cleaned script for processing
+                return True, cleaned_script
             
             # If primary model fails, try fallback
             print(colored("\nTrying fallback model...", "yellow"))
@@ -333,7 +333,9 @@ class ScriptGenerator:
             is_valid, analysis = validator.validate_script(script, channel_type)
             
             if is_valid:
-                return True, script
+                # Save script and clean it before returning
+                cleaned_script = self._save_script(script, thumbnail_title, channel_type, is_valid, analysis)
+                return True, cleaned_script
                 
             print(colored(f"Script validation failed: {analysis.get('message', 'Unknown error')}", "yellow"))
             return False, None
@@ -391,9 +393,24 @@ class ScriptGenerator:
             # Reassemble the script
             cleaned_script = '\n'.join(cleaned_lines)
             
+            # Create a TTS-friendly version without emojis
+            try:
+                import emoji
+                tts_script = emoji.replace_emoji(cleaned_script, '')
+                # Clean up any double spaces created by emoji removal
+                tts_script = ' '.join(tts_script.split())
+            except ImportError:
+                # If emoji module is not available, use regex to remove common emoji patterns
+                tts_script = re.sub(r'[\U00010000-\U0010ffff]', '', cleaned_script)
+                tts_script = ' '.join(tts_script.split())
+            
             # Save a plain text version for TTS
             with open(f"cache/scripts/{channel_type}_latest.txt", "w", encoding="utf-8") as f:
                 f.write(cleaned_script)
+            
+            # Save a TTS-friendly version without emojis
+            with open(f"cache/scripts/{channel_type}_latest_tts.txt", "w", encoding="utf-8") as f:
+                f.write(tts_script)
             
             # Generate a preview of the script (first 100 characters)
             preview = cleaned_script[:100] + "..." if len(cleaned_script) > 100 else cleaned_script
@@ -401,7 +418,8 @@ class ScriptGenerator:
             # Save the script data to a JSON file
             script_data = {
                 "script": script,  # Original script for reference
-                "cleaned_script": cleaned_script,  # Cleaned script for TTS and subtitles
+                "cleaned_script": cleaned_script,  # Cleaned script for subtitles (with emojis)
+                "tts_script": tts_script,  # TTS-friendly script without emojis
                 "thumbnail_title": thumbnail_title,
                 "preview": preview,
                 "is_valid": is_valid,
@@ -413,11 +431,11 @@ class ScriptGenerator:
                 json.dump(script_data, f, indent=2)
             
             print(colored(f"✓ Script saved to cache/scripts/{channel_type}_latest.json", "green"))
-            return True
+            return cleaned_script
 
         except Exception as e:
             print(colored(f"Error saving script: {str(e)}", "red"))
-            return False
+            return script  # Return original script if cleaning fails
 
     def track_usage(self, script, is_premium):
         """Track token usage and estimated costs"""
@@ -559,8 +577,8 @@ Style Guidelines:
         4. Actionable takeaways
         5. Natural, conversational tone
         6. Appropriate pacing for short-form video
-        7. Include emojis in the script
-        8. return a clean text script, no markdown or other formatting
+        7. IMPORTANT: Include multiple relevant emojis throughout the script (at least 3-5 emojis)
+        8. Return a clean text script, no markdown or other formatting
         {base_prompt}
         
         Additional guidelines:
@@ -568,6 +586,7 @@ Style Guidelines:
         - Use power words and engaging language
         - Create clear visual descriptions
         - End with a strong call-to-action
+        - DO NOT include any markdown separators like "---" or "***"
         
         Format the script with clear section markers and timing.
         """

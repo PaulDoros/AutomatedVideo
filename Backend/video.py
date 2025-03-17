@@ -207,15 +207,55 @@ def generate_subtitles(script: str, audio_path: str, content_type: str = None) -
         
         # Clean up sentences while preserving emojis
         sentences = []
-        for sentence in raw_sentences:
+        
+        # Function to check if a string contains only emojis
+        def is_emoji_only(text):
+            try:
+                import emoji
+                # Remove all emojis from the text
+                text_without_emojis = emoji.replace_emoji(text, '')
+                # If the result is just whitespace, then the original was only emojis
+                return text_without_emojis.strip() == ''
+            except ImportError:
+                # Fallback if emoji module is not available
+                # This is a simple check that might not catch all cases
+                return all(ord(char) > 127 for char in text.strip())
+        
+        # Process sentences, combining standalone emojis with adjacent text
+        i = 0
+        while i < len(raw_sentences):
+            current = raw_sentences[i].strip()
+            
+            # Skip empty sentences
+            if not current:
+                i += 1
+                continue
+                
+            # Check if current sentence is emoji-only
+            if is_emoji_only(current):
+                # If this is the first sentence, combine with the next one if available
+                if i == 0 and i + 1 < len(raw_sentences):
+                    next_sentence = raw_sentences[i + 1].strip()
+                    if next_sentence:
+                        sentences.append(f"{current} {next_sentence}")
+                        i += 2
+                        continue
+                # Otherwise, combine with the previous sentence if available
+                elif i > 0 and sentences:
+                    sentences[-1] = f"{sentences[-1]} {current}"
+                    i += 1
+                    continue
+            
             # Remove any HTML tags but keep emojis
-            clean_sentence = re.sub(r'<[^>]+>', '', sentence)
+            clean_sentence = re.sub(r'<[^>]+>', '', current)
             
             # Remove any trailing punctuation sequences but keep emojis
             clean_sentence = re.sub(r'[.!?]{2,}$', lambda m: m.group(0)[0], clean_sentence)
             
             if clean_sentence.strip():
                 sentences.append(clean_sentence.strip())
+            
+            i += 1
         
         # NEW: Split long sentences into smaller chunks for better readability
         max_chars_per_subtitle = 100  # Maximum characters per subtitle
@@ -864,7 +904,7 @@ def get_emoji_image(emoji_char, size=120):
     """Get colored emoji image using Twitter's emoji CDN with improved caching and fallbacks"""
     try:
         # Debug: Log the emoji character we're trying to get (reduced logging)
-        print(colored(f"Getting emoji image for: {emoji_char} with size {size}", "cyan"))
+      
         
         # Create cache directory if it doesn't exist
         cache_dir = "temp/emoji_cache"
@@ -873,12 +913,12 @@ def get_emoji_image(emoji_char, size=120):
         # Generate a unique identifier for this emoji
         emoji_id = "-".join(f"{ord(c):x}" for c in emoji_char)
         cache_path = os.path.join(cache_dir, f"{emoji_id}_{size}.png")
-        print(colored(f"Emoji ID: {emoji_id}, Cache path: {cache_path}", "cyan"))
+    
         
         # Check cache first
         if os.path.exists(cache_path):
             try:
-                print(colored(f"Found cached emoji image: {cache_path}", "green"))
+               
                 emoji_img = Image.open(cache_path).convert('RGBA')
                 return emoji_img
             except Exception as e:
@@ -930,7 +970,7 @@ def get_emoji_image(emoji_char, size=120):
             print(colored(f"Trying with just the first character: {first_char}", "yellow"))
             first_emoji = get_emoji_image(first_char, size)
             if first_emoji:
-                print(colored(f"Successfully got emoji image for first character: {first_char}", "green"))
+              
                 return first_emoji
         
         # If all attempts fail, create a fallback emoji
@@ -1121,6 +1161,10 @@ def create_text_with_emoji(txt, size=(1080, 800)):
             # Second pass: actually render the text and emojis
             x_offset = x
             i = 0
+            
+            # Define emoji_y_offset outside the conditional block
+            emoji_y_offset = -5  # Adjust this value to move emoji up (negative value)
+            
             while i < len(line):
                 char = line[i]
                 
@@ -1141,9 +1185,8 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                     if emoji_img:
                         # Reduced logging - only log success for first emoji
                         if i < 5:
-                            print(colored(f"Successfully got emoji image for: {char}", "green"))
-                        # Remove vertical offset to align emoji with text baseline
-                        emoji_y_offset = -5  # Adjust this value to move emoji up (negative value)
+                            pass  # Removed logging to reduce verbosity
+                        
                         # Paste emoji image at current position with vertical alignment adjustment
                         img.paste(emoji_img, (x_offset, y_offset + emoji_y_offset), emoji_img)
                         
