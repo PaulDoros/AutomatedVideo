@@ -999,13 +999,38 @@ def create_text_with_emoji(txt, size=(1080, 800)):
         words = txt.split()
         lines = []
         current_line = ""
+        max_width = size[0] - 200  # Maximum width for a line with padding
         
         for word in words:
+            # Handle very long words by breaking them if needed
+            if not current_line and len(word) > 20:  # If it's a very long word
+                word_bbox = draw.textbbox((0, 0), word, font=font)
+                word_width = word_bbox[2]
+                
+                if word_width > max_width:
+                    # Break the long word into chunks
+                    chars = list(word)
+                    chunk = ""
+                    for char in chars:
+                        test_chunk = chunk + char
+                        chunk_bbox = draw.textbbox((0, 0), test_chunk, font=font)
+                        chunk_width = chunk_bbox[2]
+                        
+                        if chunk_width <= max_width:
+                            chunk = test_chunk
+                        else:
+                            lines.append(chunk)
+                            chunk = char
+                    
+                    if chunk:
+                        current_line = chunk
+                    continue
+            
             test_line = current_line + " " + word if current_line else word
             test_bbox = draw.textbbox((0, 0), test_line, font=font)
             test_width = test_bbox[2]
             
-            if test_width <= size[0] - 100:  # Increased padding for better centering
+            if test_width <= max_width:
                 current_line = test_line
             else:
                 if current_line:
@@ -1075,7 +1100,8 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                     line_width += chunk_width
                     i = j
             
-            line_widths.append(line_width)
+            # Add a small buffer to ensure text doesn't get too close to the edges
+            line_widths.append(line_width + 10)  # Add 10px buffer for safety
         
         # Process text line by line to handle emojis
         y_offset = y
@@ -1083,10 +1109,14 @@ def create_text_with_emoji(txt, size=(1080, 800)):
         for line_idx, line in enumerate(lines):
             # Reduced logging - only log line number and content for first line
             if line_idx == 0:
-               
+                pass  # Removed logging to reduce verbosity
             
             # Calculate x position to center this specific line using pre-calculated width
-                x = (size[0] - line_widths[line_idx]) // 2
+            # Add a small margin to ensure text is always centered consistently
+            x = (size[0] - line_widths[line_idx]) // 2
+            
+            # Ensure x is never negative (prevents text from going off-screen)
+            x = max(20, x)
             
             # Second pass: actually render the text and emojis
             x_offset = x
@@ -1149,12 +1179,22 @@ def create_text_with_emoji(txt, size=(1080, 800)):
                     # Draw the text chunk
                     chunk_bbox = draw.textbbox((0, 0), text_chunk, font=font)
                     chunk_width = chunk_bbox[2] - chunk_bbox[0]
+                    
+                    # Add text outline for better visibility
+                    outline_positions = [
+                        (x_offset-1, y_offset), (x_offset+1, y_offset),
+                        (x_offset, y_offset-1), (x_offset, y_offset+1)
+                    ]
+                    for outline_x, outline_y in outline_positions:
+                        draw.text((outline_x, outline_y), text_chunk, fill=(0, 0, 0, 180), font=font)
+                    
+                    # Draw the main text
                     draw.text((x_offset, y_offset), text_chunk, fill=(255, 255, 255, 255), font=font)
                     x_offset += chunk_width
                     i = j
             
-            # Move to next line
-            y_offset += int(font.size * 1.2)  # Line spacing
+            # Move to next line with consistent spacing
+            y_offset += int(font.size * 1.3)  # Increased from 1.2 to 1.3 for better line spacing
         
         # Debug: Save a copy of the image for inspection
         debug_dir = "temp/debug"
