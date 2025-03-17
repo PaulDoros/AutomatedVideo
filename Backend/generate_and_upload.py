@@ -34,9 +34,21 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
     content_validator = ContentValidator()
     learning_system = ContentLearningSystem()
     
+    # Check if we can post today
+    if not content_monitor.can_post_today(channel_type):
+        log_warning(f"Daily post limit reached for {channel_type}")
+        return None
+    
     # Set music volume for better audibility
     video_gen.music_volume = music_volume
     log_info(f"Music volume set to: {video_gen.music_volume}", "🎵")
+    
+    # Analyze content patterns before generating new content
+    patterns = content_monitor.analyze_content_patterns(channel_type)
+    if patterns['status'] == 'success':
+        log_info("Recent content analysis:")
+        log_info(f"- Average posts per day: {patterns['avg_posts_per_day']:.1f}")
+        log_info(f"- Recent topics: {', '.join(patterns['recent_topics'])}")
     
     # Check if topic is a duplicate using both systems
     is_duplicate = False
@@ -44,6 +56,10 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
         # Check with content monitor
         if content_monitor.is_topic_duplicate(channel_type, topic):
             log_warning(f"Topic '{topic}' is a duplicate for {channel_type}")
+            # Try to get an alternative topic
+            alternative = content_monitor.suggest_alternative_topic(channel_type, topic)
+            if alternative:
+                log_info(f"Suggested alternative: {alternative}")
             is_duplicate = True
         
         # Check with learning system
@@ -57,25 +73,41 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
         if is_blacklisted:
             log_warning(f"Topic '{topic}' is blacklisted: {reason}")
             is_duplicate = True
-        
+            
         if is_duplicate:
-            # Suggest alternative topic
-            suggestion = content_monitor.suggest_alternative_topic(channel_type, topic)
+            return None
+    
+    # Generate script with enhanced uniqueness checks
+    script = None
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        if topic:
+            script = await script_gen.generate_script(channel_type, topic)
+        else:
+            script = await script_gen.generate_script(channel_type)
             
-            if suggestion:
-                log_info(f"Suggestion: {suggestion}", "💡")
-                
-                # Extract alternative topic from suggestion
-                alt_topic = suggestion.split("Try '")[1].split("'")[0]
-                topic = alt_topic
-                
-                # Get content suggestions from learning system
-                content_suggestions = learning_system.get_content_suggestions(channel_type, topic)
-                if content_suggestions:
-                    log_info("Content suggestions from learning system:", "📊")
-                    for i, suggestion in enumerate(content_suggestions[:3], 1):
-                        log_info(f"  {i}. {suggestion['message']}")
+        if not script:
+            log_warning(f"Failed to generate script (attempt {attempt + 1}/{max_attempts})")
+            continue
             
+        # Validate script
+        is_valid, validation = content_validator.validate_script(script, channel_type)
+        if not is_valid:
+            log_warning(f"Script validation failed: {validation['message']}")
+            continue
+            
+        # Check for content uniqueness
+        if content_monitor.is_topic_duplicate(channel_type, script):
+            log_warning("Generated script is too similar to existing content")
+            continue
+            
+        # If we get here, we have a valid and unique script
+        break
+        
+    if not script:
+        log_error("Failed to generate a valid and unique script")
+        return None
+    
     # For tech_humor channel, use JokeProvider
     if channel_type == 'tech_humor':
         log_info(f"Using JokeProvider for {channel_type} channel...", "🎭")
@@ -153,25 +185,6 @@ async def generate_content(channel_type, topic=None, music_volume=0.3, no_upload
             log_info("Content suggestions from learning system:", "📊")
             for i, suggestion in enumerate(content_suggestions[:3], 1):
                 log_info(f"  {i}. {suggestion['message']}")
-        
-        # Generate script
-        log_section("Generating Script", "📝")
-        is_valid, script = await script_gen.generate_script(topic, channel_type)
-        
-        if not is_valid or not script:
-            log_error("Script generation failed")
-            
-            # Check if script is repetitive or blacklisted
-            if script:
-                is_repetitive, details = learning_system.is_content_repetitive(channel_type, script)
-                if is_repetitive:
-                    log_warning(f"Generated script is too similar to recent content: {details['message']}")
-                
-                is_blacklisted, reason = learning_system.is_content_blacklisted(channel_type, script)
-                if is_blacklisted:
-                    log_warning(f"Generated script is blacklisted: {reason}")
-            
-            return None
         
         # Save script to file for reference
         os.makedirs("cache/scripts", exist_ok=True)

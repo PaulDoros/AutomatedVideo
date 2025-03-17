@@ -178,7 +178,8 @@ class ContentValidator:
             'max_words': 150,
             'min_duration': 20,
             'max_duration': 60,
-            'required_elements': []
+            'required_elements': [],
+            'posts_per_day': 4  # Default posting frequency
         }
         
         # Channel-specific standards
@@ -188,35 +189,48 @@ class ContentValidator:
                 'max_words': 100,
                 'min_duration': 10,
                 'max_duration': 60,
-                'required_elements': []
+                'required_elements': [],
+                'posts_per_day': 6  # More frequent for tech humor
             },
             'ai_money': {
                 'max_lines': 15,
                 'max_words': 200,
                 'min_duration': 30,
                 'max_duration': 90,
-                'required_elements': []
+                'required_elements': [],
+                'posts_per_day': 4  # Standard frequency
+            },
+            'baby_stories': {  # New channel
+                'max_lines': 25,
+                'max_words': 300,
+                'min_duration': 60,
+                'max_duration': 180,  # Longer videos for stories
+                'required_elements': ['moral', 'lesson'],
+                'posts_per_day': 1  # One story per day
             },
             'baby_tips': {
                 'max_lines': 15,
                 'max_words': 200,
                 'min_duration': 30,
                 'max_duration': 90,
-                'required_elements': []
+                'required_elements': [],
+                'posts_per_day': 4
             },
             'quick_meals': {
                 'max_lines': 15,
                 'max_words': 200,
                 'min_duration': 30,
                 'max_duration': 90,
-                'required_elements': []
+                'required_elements': [],
+                'posts_per_day': 4
             },
             'fitness_motivation': {
                 'max_lines': 15,
                 'max_words': 200,
                 'min_duration': 30,
                 'max_duration': 90,
-                'required_elements': []
+                'required_elements': [],
+                'posts_per_day': 4
             }
         }
         

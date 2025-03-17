@@ -14,6 +14,8 @@ from nltk.stem import WordNetLemmatizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+from collections import Counter
+import random
 
 # Download NLTK resources if not already downloaded
 try:
@@ -47,6 +49,140 @@ class ContentMonitor:
         self.stop_words = set(stopwords.words('english'))
         self.lemmatizer = WordNetLemmatizer()
         self.vectorizer = TfidfVectorizer()
+        
+        # Load channel standards
+        self.content_validator = ContentValidator()
+    
+    def get_daily_post_limit(self, channel_type):
+        """Get the number of posts allowed per day for a channel"""
+        standards = self.content_validator.get_channel_standards(channel_type)
+        return standards.get('posts_per_day', 4)  # Default to 4 if not specified
+        
+    def get_posts_today(self, channel_type):
+        """Get the number of posts made today for a channel"""
+        self.db.connect()
+        try:
+            today = datetime.now().date()
+            self.db.cursor.execute('''
+                SELECT COUNT(*) FROM content_history
+                WHERE channel_type = ? AND DATE(upload_date) = ?
+            ''', (channel_type, today.isoformat()))
+            count = self.db.cursor.fetchone()[0]
+            return count
+        finally:
+            self.db.disconnect()
+            
+    def can_post_today(self, channel_type):
+        """Check if more posts are allowed today for this channel"""
+        limit = self.get_daily_post_limit(channel_type)
+        current = self.get_posts_today(channel_type)
+        return current < limit
+        
+    def get_content_history(self, channel_type, days=60):
+        """Get content history for a channel"""
+        self.db.connect()
+        try:
+            cutoff_date = datetime.now() - timedelta(days=days)
+            self.db.cursor.execute('''
+                SELECT topic, keywords, upload_date, video_id
+                FROM content_history
+                WHERE channel_type = ? AND upload_date > ?
+                ORDER BY upload_date DESC
+            ''', (channel_type, cutoff_date.isoformat()))
+            
+            history = []
+            for row in self.db.cursor.fetchall():
+                history.append({
+                    'topic': row[0],
+                    'keywords': json.loads(row[1]) if row[1] else [],
+                    'upload_date': row[2],
+                    'video_id': row[3]
+                })
+            return history
+        finally:
+            self.db.disconnect()
+            
+    def analyze_content_patterns(self, channel_type):
+        """Analyze content patterns to avoid repetition"""
+        history = self.get_content_history(channel_type)
+        if not history:
+            return {'status': 'no_history'}
+            
+        # Analyze keyword frequency
+        keyword_freq = Counter()
+        for item in history:
+            keyword_freq.update(item['keywords'])
+            
+        # Get most common topics/themes
+        topics = [item['topic'] for item in history]
+        topic_freq = Counter(topics)
+        
+        # Calculate posting frequency
+        dates = [datetime.fromisoformat(item['upload_date']) for item in history]
+        date_freq = Counter([d.date() for d in dates])
+        avg_posts_per_day = len(dates) / (max(dates).date() - min(dates).date()).days if len(dates) > 1 else 0
+        
+        return {
+            'status': 'success',
+            'common_keywords': dict(keyword_freq.most_common(10)),
+            'common_topics': dict(topic_freq.most_common(5)),
+            'avg_posts_per_day': avg_posts_per_day,
+            'recent_topics': topics[:5],
+            'total_posts': len(history)
+        }
+        
+    def is_topic_duplicate(self, channel_type, topic):
+        """Enhanced duplicate topic detection"""
+        # First check exact matches
+        if self.db.check_topic_exists(channel_type, topic, days=self.min_topic_gap):
+            return True
+            
+        # Get recent content history
+        history = self.get_content_history(channel_type)
+        if not history:
+            return False
+            
+        # Extract keywords from the new topic
+        new_keywords = set(self._extract_keywords(topic))
+        
+        # Check keyword overlap with recent content
+        for item in history:
+            existing_keywords = set(item['keywords'])
+            overlap = len(new_keywords & existing_keywords) / len(new_keywords) if new_keywords else 0
+            
+            if overlap > 0.7:  # 70% keyword overlap threshold
+                return True
+                
+            # Check semantic similarity
+            similarity = self.calculate_similarity(topic, item['topic'])
+            if similarity > self.similarity_threshold:
+                return True
+                
+        return False
+        
+    def suggest_alternative_topic(self, channel_type, topic):
+        """Enhanced topic suggestion based on content history"""
+        # Get content patterns
+        patterns = self.analyze_content_patterns(channel_type)
+        if patterns['status'] != 'success':
+            return None
+            
+        # Extract keywords from the original topic
+        original_keywords = set(self._extract_keywords(topic))
+        
+        # Find keywords that are successful but not overused
+        common_keywords = patterns['common_keywords']
+        successful_keywords = [k for k, v in common_keywords.items() 
+                             if v < patterns['total_posts'] * 0.3]  # Used in less than 30% of posts
+                             
+        # Combine some original keywords with successful keywords
+        kept_original = list(original_keywords)[:2]  # Keep 2 original keywords
+        new_keywords = kept_original + random.sample(successful_keywords, 
+                                                   min(3, len(successful_keywords)))
+                                                   
+        # Create suggestion
+        suggestion = f"Alternative for '{topic}': Try combining these elements: {', '.join(new_keywords)}"
+        return suggestion
     
     async def fetch_channel_videos(self, channel_type, max_results=100):
         """Fetch videos from a YouTube channel"""
@@ -280,101 +416,6 @@ class ContentMonitor:
             await self.store_channel_videos(channel)
         
         print(colored("✓ Completed storing videos from all channels", "green"))
-    
-    def is_topic_duplicate(self, channel_type, topic):
-        """Check if a topic is a duplicate"""
-        # Check if topic exists in database
-        if self.db.check_topic_exists(channel_type, topic, days=self.min_topic_gap):
-            return True
-        
-        # Get recent topics for channel
-        self.db.connect()
-        self.db.cursor.execute('''
-        SELECT topic FROM content_history
-        WHERE channel_type = ? AND upload_date > ?
-        ''', (
-            channel_type,
-            (datetime.now() - timedelta(days=self.min_topic_gap)).isoformat()
-        ))
-        
-        recent_topics = [row[0] for row in self.db.cursor.fetchall()]
-        self.db.disconnect()
-        
-        # Check similarity with recent topics
-        for recent_topic in recent_topics:
-            similarity = self.calculate_similarity(topic, recent_topic)
-            
-            if similarity > self.similarity_threshold:
-                print(colored(f"Topic '{topic}' is similar to existing topic '{recent_topic}' (similarity: {similarity:.2f})", "yellow"))
-                return True
-        
-        return False
-    
-    def is_content_duplicate(self, channel_type, content):
-        """Check if content is a duplicate"""
-        # Get recent content for channel
-        self.db.connect()
-        self.db.cursor.execute('''
-        SELECT script FROM videos
-        WHERE channel_type = ? AND upload_date > ?
-        ''', (
-            channel_type,
-            (datetime.now() - timedelta(days=self.min_topic_gap)).isoformat()
-        ))
-        
-        recent_scripts = [row[0] for row in self.db.cursor.fetchall() if row[0]]
-        self.db.disconnect()
-        
-        # Check similarity with recent scripts
-        for script in recent_scripts:
-            similarity = self.calculate_similarity(content, script)
-            
-            if similarity > self.similarity_threshold:
-                print(colored(f"Content has {similarity:.2f} similarity with existing content", "yellow"))
-                return True
-        
-        return False
-    
-    def suggest_alternative_topic(self, channel_type, topic):
-        """Suggest an alternative topic if the original is a duplicate"""
-        # Extract keywords from topic
-        keywords = self.extract_keywords(topic, top_n=5)
-        
-        if not keywords:
-            return None
-        
-        # Get recent topics for channel
-        self.db.connect()
-        self.db.cursor.execute('''
-        SELECT topic FROM content_history
-        WHERE channel_type = ?
-        ORDER BY upload_date DESC
-        LIMIT 50
-        ''', (channel_type,))
-        
-        recent_topics = [row[0] for row in self.db.cursor.fetchall()]
-        self.db.disconnect()
-        
-        # Find topics that don't contain the keywords
-        alternative_keywords = []
-        
-        for recent_topic in recent_topics:
-            topic_keywords = self.extract_keywords(recent_topic, top_n=5)
-            
-            for keyword in topic_keywords:
-                if keyword not in keywords and keyword not in alternative_keywords:
-                    alternative_keywords.append(keyword)
-        
-        # Combine original and alternative keywords
-        if alternative_keywords:
-            # Take 2 original keywords and 3 alternative keywords
-            combined_keywords = keywords[:2] + alternative_keywords[:3]
-            
-            # Create a new topic suggestion
-            suggestion = f"Alternative for '{topic}': Try '{' '.join(combined_keywords)}'"
-            return suggestion
-        
-        return None
 
 async def test_content_monitor():
     """Test the content monitor functionality"""
